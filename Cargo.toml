@@ -1,0 +1,16 @@
+[package]
+name = "iso-tp"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["std"]
+std = ["alloc"]
+alloc = []
+
+[dependencies]
+embedded-can = "0.4.1"
+embedded-can-interface = { path = "../embedded-can-interface" }
+
+[dev-dependencies]
+embedded-can-mock = { path = "../embedded-can-mock" }
