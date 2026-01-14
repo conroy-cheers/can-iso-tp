@@ -371,3 +371,122 @@ where
         IsoTpAsyncNode::with_clock(tx, rx, cfg, crate::StdClock, None)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::boxed::Box;
+    use core::future::Future;
+    use core::pin::Pin;
+    use std::sync::Mutex;
+
+    #[derive(Debug, Clone, Copy)]
+    struct TestClock {
+        now_ms: u64,
+    }
+
+    impl Clock for TestClock {
+        type Instant = u64;
+
+        fn now(&self) -> Self::Instant {
+            self.now_ms
+        }
+
+        fn elapsed(&self, earlier: Self::Instant) -> Duration {
+            Duration::from_millis(self.now_ms.saturating_sub(earlier))
+        }
+
+        fn add(&self, instant: Self::Instant, dur: Duration) -> Self::Instant {
+            instant.saturating_add(dur.as_millis() as u64)
+        }
+    }
+
+    #[derive(Default)]
+    struct TestRuntime {
+        sleeps: Mutex<Vec<Duration>>,
+    }
+
+    impl AsyncRuntime for TestRuntime {
+        type TimeoutError = ();
+
+        type Sleep<'a> = core::future::Ready<()>
+        where
+            Self: 'a;
+
+        fn sleep<'a>(&'a self, duration: Duration) -> Self::Sleep<'a> {
+            self.sleeps.lock().unwrap().push(duration);
+            core::future::ready(())
+        }
+
+        type Timeout<'a, F> = Pin<Box<dyn Future<Output = Result<F::Output, Self::TimeoutError>> + 'a>>
+        where
+            Self: 'a,
+            F: Future + 'a;
+
+        fn timeout<'a, F>(&'a self, _duration: Duration, future: F) -> Self::Timeout<'a, F>
+        where
+            F: Future + 'a,
+        {
+            Box::pin(async move { Ok(future.await) })
+        }
+    }
+
+    #[test]
+    fn remaining_handles_underflow() {
+        assert_eq!(
+            remaining(Duration::from_millis(10), Duration::from_millis(5)),
+            Some(Duration::from_millis(5))
+        );
+        assert_eq!(
+            remaining(Duration::from_millis(10), Duration::from_millis(10)),
+            Some(Duration::from_millis(0))
+        );
+        assert_eq!(
+            remaining(Duration::from_millis(10), Duration::from_millis(11)),
+            None
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sleep_or_timeout_uses_min_of_requested_and_remaining() {
+        let clock = TestClock { now_ms: 30 };
+        let rt = TestRuntime::default();
+        let start = 0u64;
+
+        let res = sleep_or_timeout::<_, _, ()>(
+            &clock,
+            &rt,
+            start,
+            Duration::from_millis(100),
+            TimeoutKind::NAs,
+            Duration::from_millis(200),
+        )
+        .await;
+        assert!(res.is_ok());
+
+        let sleeps = rt.sleeps.lock().unwrap().clone();
+        assert_eq!(sleeps, vec![Duration::from_millis(70)]);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sleep_or_timeout_returns_timeout_when_elapsed_exceeds_deadline() {
+        let clock = TestClock { now_ms: 100 };
+        let rt = TestRuntime::default();
+        let start = 0u64;
+
+        let err = sleep_or_timeout::<_, _, ()>(
+            &clock,
+            &rt,
+            start,
+            Duration::from_millis(50),
+            TimeoutKind::NAs,
+            Duration::from_millis(1),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, IsoTpError::Timeout(TimeoutKind::NAs)));
+
+        let sleeps = rt.sleeps.lock().unwrap().clone();
+        assert!(sleeps.is_empty());
+    }
+}
