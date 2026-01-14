@@ -14,3 +14,4 @@ embedded-can-interface = { path = "../embedded-can-interface" }
 
 [dev-dependencies]
 embedded-can-mock = { path = "../embedded-can-mock" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }

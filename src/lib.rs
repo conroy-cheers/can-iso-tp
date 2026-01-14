@@ -7,6 +7,8 @@
 extern crate alloc;
 
 pub mod config;
+pub mod async_io;
+pub mod async_node;
 pub mod errors;
 pub mod pdu;
 pub mod rx;
@@ -14,6 +16,8 @@ pub mod timer;
 pub mod tx;
 
 pub use config::IsoTpConfig;
+pub use async_io::{AsyncRuntime, TimedOut};
+pub use async_node::IsoTpAsyncNode;
 pub use errors::{IsoTpError, TimeoutKind};
 pub use timer::{Clock, StdClock};
 pub use tx::Progress;
@@ -26,9 +30,6 @@ use embedded_can_interface::{Id, RxFrameIo, TxFrameIo};
 use pdu::{FlowStatus, Pdu, decode, duration_to_st_min, encode, st_min_to_duration};
 use rx::{RxBuffer, RxMachine, RxOutcome};
 use tx::{TxSession, TxState};
-
-#[cfg(any(feature = "alloc", feature = "std"))]
-use alloc::vec::Vec;
 
 /// Alias for CAN identifier.
 pub type CanId = Id;
@@ -103,12 +104,12 @@ where
         match state {
             TxState::Idle => self.start_send(payload, now),
             TxState::WaitingForFc { session, deadline } => {
-                self.continue_wait_for_fc(session, deadline, now)
+                self.continue_wait_for_fc(payload, session, deadline, now)
             }
             TxState::Sending {
                 session,
                 st_min_deadline,
-            } => self.continue_send(session, st_min_deadline, now),
+            } => self.continue_send(payload, session, st_min_deadline, now),
         }
     }
 
@@ -225,26 +226,18 @@ where
             return Ok(Progress::Completed);
         }
 
-        #[cfg(not(any(feature = "alloc", feature = "std")))]
         {
-            let _ = now;
-            return Err(IsoTpError::InvalidConfig);
-        }
-
-        #[cfg(any(feature = "alloc", feature = "std"))]
-        {
-            let session = TxSession::new(payload.to_vec(), self.cfg.block_size, self.cfg.st_min);
-            let len = session.payload.len();
-            let chunk = session.payload.len().min(6);
+            let mut session = TxSession::new(payload.len(), self.cfg.block_size, self.cfg.st_min);
+            let len = payload.len();
+            let chunk = payload.len().min(6);
             let pdu = Pdu::FirstFrame {
                 len: len as u16,
-                data: &session.payload[..chunk],
+                data: &payload[..chunk],
             };
             let frame = encode(self.cfg.tx_id, &pdu, self.cfg.padding)
                 .map_err(|_| IsoTpError::InvalidFrame)?;
             self.tx.try_send(&frame).map_err(IsoTpError::LinkError)?;
 
-            let mut session = session;
             session.offset = chunk;
 
             let deadline = self.clock.add(now, self.cfg.n_bs);
@@ -255,10 +248,15 @@ where
 
     fn continue_wait_for_fc(
         &mut self,
+        payload: &[u8],
         mut session: TxSession,
         deadline: C::Instant,
         now: C::Instant,
     ) -> Result<Progress, IsoTpError<Tx::Error>> {
+        if payload.len() != session.payload_len {
+            self.tx_state = TxState::Idle;
+            return Err(IsoTpError::NotIdle);
+        }
         if session.wait_count > self.cfg.wft_max {
             self.tx_state = TxState::Idle;
             return Err(IsoTpError::Timeout(TimeoutKind::NBs));
@@ -294,7 +292,7 @@ where
                     session.block_size = bs;
                     session.block_remaining = bs;
                     session.st_min = st_min_to_duration(st_min).unwrap_or(self.cfg.st_min);
-                    return self.continue_send(session, None, now);
+                    return self.continue_send(payload, session, None, now);
                     }
                     FlowStatus::Wait => {
                         if cfg!(debug_assertions) {
@@ -325,10 +323,15 @@ where
 
     fn continue_send(
         &mut self,
+        payload: &[u8],
         mut session: TxSession,
         st_min_deadline: Option<C::Instant>,
         now: C::Instant,
     ) -> Result<Progress, IsoTpError<Tx::Error>> {
+        if payload.len() != session.payload_len {
+            self.tx_state = TxState::Idle;
+            return Err(IsoTpError::NotIdle);
+        }
         if let Some(deadline) = st_min_deadline {
             if now < deadline {
                 self.tx_state = TxState::Sending {
@@ -339,14 +342,14 @@ where
             }
         }
 
-        if session.offset >= session.payload.len() {
+        if session.offset >= session.payload_len {
             self.tx_state = TxState::Idle;
             return Ok(Progress::Completed);
         }
 
-        let remaining = session.payload.len() - session.offset;
+        let remaining = session.payload_len - session.offset;
         let chunk = remaining.min(7);
-        let data = &session.payload[session.offset..session.offset + chunk];
+        let data = &payload[session.offset..session.offset + chunk];
         let pdu = Pdu::ConsecutiveFrame {
             sn: session.next_sn & 0x0F,
             data,
@@ -358,7 +361,7 @@ where
         session.offset += chunk;
         session.next_sn = (session.next_sn + 1) & 0x0F;
 
-        if session.offset >= session.payload.len() {
+        if session.offset >= session.payload_len {
             self.tx_state = TxState::Idle;
             return Ok(Progress::Completed);
         }

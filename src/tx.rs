@@ -2,9 +2,6 @@
 
 use core::time::Duration;
 
-#[cfg(any(feature = "alloc", feature = "std"))]
-use alloc::vec::Vec;
-
 /// Progress indicator for non-blocking APIs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Progress {
@@ -20,8 +17,8 @@ pub enum Progress {
 
 /// Bookkeeping for an in-flight segmented transfer.
 pub struct TxSession {
-    /// Full payload to send.
-    pub payload: Vec<u8>,
+    /// Expected full payload length.
+    pub payload_len: usize,
     /// Current offset into payload.
     pub offset: usize,
     /// Next sequence number nibble.
@@ -38,10 +35,10 @@ pub struct TxSession {
 
 impl TxSession {
     /// Build a new session with provided limits.
-    pub fn new(payload: Vec<u8>, block_size: u8, st_min: Duration) -> Self {
+    pub fn new(payload_len: usize, block_size: u8, st_min: Duration) -> Self {
         let remaining = block_size;
         Self {
-            payload,
+            payload_len,
             offset: 0,
             next_sn: 1,
             block_size,
