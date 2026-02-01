@@ -1,4 +1,4 @@
-//! `iso-tp`: a lightweight ISO-TP (ISO 15765-2) transport layer for CAN.
+//! `can-iso-tp`: a lightweight ISO-TP (ISO 15765-2) transport layer for CAN.
 //!
 //! ISO-TP (“ISO Transport Protocol”) defines how to carry *larger* payloads over classic CAN by
 //! segmenting messages into:
@@ -40,10 +40,10 @@
 //!
 //! ```rust,ignore
 //! use core::time::Duration;
-//! use iso_tp::{IsoTpConfig, IsoTpNode, Progress, StdClock};
+//! use can_iso_tp::{IsoTpConfig, IsoTpNode, Progress, StdClock};
 //! use embedded_can_interface::SplitTxRx;
 //!
-//! # fn example<D, F>(driver: D, cfg: IsoTpConfig) -> Result<(), iso_tp::IsoTpError<D::Error>>
+//! # fn example<D, F>(driver: D, cfg: IsoTpConfig) -> Result<(), can_iso_tp::IsoTpError<D::Error>>
 //! # where
 //! #   D: SplitTxRx,
 //! #   D::Tx: embedded_can_interface::TxFrameIo<Frame = F>,

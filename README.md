@@ -1,4 +1,4 @@
-# iso-tp
+# can-iso-tp
 
 Lightweight ISO-TP (ISO 15765-2) transport for CAN.
 

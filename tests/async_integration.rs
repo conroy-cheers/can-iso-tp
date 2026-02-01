@@ -2,12 +2,12 @@ use core::time::Duration;
 use std::sync::Arc;
 use std::time::Instant;
 
+use can_iso_tp::pdu::{Pdu, decode, encode};
+use can_iso_tp::{AsyncRuntime, IsoTpAsyncNode, IsoTpConfig};
 use embedded_can::Frame;
 use embedded_can_interface::AsyncTxFrameIo;
 use embedded_can_interface::Id;
 use embedded_can_mock::MockFrame;
-use iso_tp::pdu::{Pdu, decode, encode};
-use iso_tp::{AsyncRuntime, IsoTpAsyncNode, IsoTpConfig};
 use tokio::sync::{Mutex, mpsc};
 
 #[derive(Debug)]
@@ -349,7 +349,7 @@ async fn async_send_times_out_waiting_for_flow_control_nbs() {
         .unwrap_err();
     assert!(matches!(
         err,
-        iso_tp::IsoTpError::Timeout(iso_tp::TimeoutKind::NBs)
+        can_iso_tp::IsoTpError::Timeout(can_iso_tp::TimeoutKind::NBs)
     ));
 }
 
@@ -371,7 +371,7 @@ async fn async_send_times_out_waiting_for_flow_control_nas() {
         .unwrap_err();
     assert!(matches!(
         err,
-        iso_tp::IsoTpError::Timeout(iso_tp::TimeoutKind::NAs)
+        can_iso_tp::IsoTpError::Timeout(can_iso_tp::TimeoutKind::NAs)
     ));
 }
 
@@ -395,7 +395,7 @@ async fn async_recv_times_out_nar_even_with_noise_and_flow_control_frames() {
     let fc: MockFrame = encode(
         cfg_a.rx_id,
         &Pdu::FlowControl {
-            status: iso_tp::pdu::FlowStatus::ClearToSend,
+            status: can_iso_tp::pdu::FlowStatus::ClearToSend,
             block_size: 0,
             st_min: 0,
         },
@@ -411,7 +411,7 @@ async fn async_recv_times_out_nar_even_with_noise_and_flow_control_frames() {
         .unwrap_err();
     assert!(matches!(
         err,
-        iso_tp::IsoTpError::Timeout(iso_tp::TimeoutKind::NAr)
+        can_iso_tp::IsoTpError::Timeout(can_iso_tp::TimeoutKind::NAr)
     ));
 }
 
@@ -459,5 +459,5 @@ async fn async_recv_rejects_bad_sequence_number() {
         .recv(&rt, Duration::from_millis(300), &mut |_| {})
         .await
         .unwrap_err();
-    assert!(matches!(err, iso_tp::IsoTpError::BadSequence));
+    assert!(matches!(err, can_iso_tp::IsoTpError::BadSequence));
 }

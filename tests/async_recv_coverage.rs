@@ -2,12 +2,12 @@ use core::future::Future;
 use core::pin::Pin;
 use core::time::Duration;
 
+use can_iso_tp::pdu::{Pdu, decode_with_offset, encode_with_prefix};
+use can_iso_tp::{AsyncRuntime, Clock, IsoTpAsyncNode, IsoTpConfig, IsoTpError, TimeoutKind};
 use embedded_can::Frame;
 use embedded_can::StandardId;
 use embedded_can_interface::{AsyncRxFrameIo, AsyncTxFrameIo, Id};
 use embedded_can_mock::MockFrame;
-use iso_tp::pdu::{Pdu, decode_with_offset, encode_with_prefix};
-use iso_tp::{AsyncRuntime, Clock, IsoTpAsyncNode, IsoTpConfig, IsoTpError, TimeoutKind};
 
 #[derive(Clone, Copy, Debug)]
 struct TestClock;
@@ -202,7 +202,7 @@ async fn async_recv_overflow_sends_overflow_flow_control() {
     assert!(matches!(
         fc,
         Pdu::FlowControl {
-            status: iso_tp::pdu::FlowStatus::Overflow,
+            status: can_iso_tp::pdu::FlowStatus::Overflow,
             ..
         }
     ));
@@ -232,7 +232,7 @@ async fn async_send_maps_link_error_and_timeout() {
     let wrong_addr_fc = encode_with_prefix::<MockFrame>(
         cfg.rx_id,
         &Pdu::FlowControl {
-            status: iso_tp::pdu::FlowStatus::ClearToSend,
+            status: can_iso_tp::pdu::FlowStatus::ClearToSend,
             block_size: 0,
             st_min: 0,
         },
@@ -253,7 +253,7 @@ async fn async_send_maps_link_error_and_timeout() {
     let wait_fc = encode_with_prefix::<MockFrame>(
         cfg.rx_id,
         &Pdu::FlowControl {
-            status: iso_tp::pdu::FlowStatus::Wait,
+            status: can_iso_tp::pdu::FlowStatus::Wait,
             block_size: 0,
             st_min: 0,
         },
@@ -264,7 +264,7 @@ async fn async_send_maps_link_error_and_timeout() {
     let cts_fc = encode_with_prefix::<MockFrame>(
         cfg.rx_id,
         &Pdu::FlowControl {
-            status: iso_tp::pdu::FlowStatus::ClearToSend,
+            status: can_iso_tp::pdu::FlowStatus::ClearToSend,
             block_size: 0,
             st_min: 0,
         },

@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 
 /// Storage for reassembling an incoming payload.
 ///
-/// `iso-tp` supports both:
+/// `can-iso-tp` supports both:
 /// - caller-provided buffers (common in `no_std`), and
 /// - owned buffers when allocation is available.
 pub enum RxBuffer<'a> {

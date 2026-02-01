@@ -1,6 +1,6 @@
 //! Async helpers for integrating ISO-TP with runtimes (tokio, embassy, ...).
 //!
-//! The goal of this module is to keep `iso-tp` runtime-agnostic: instead of depending on a
+//! The goal of this module is to keep `can-iso-tp` runtime-agnostic: instead of depending on a
 //! particular executor or timer API, [`AsyncRuntime`] models just the two operations ISO-TP needs:
 //! sleeping and timing out a future.
 
@@ -37,7 +37,7 @@ pub trait AsyncRuntime {
 
     /// Run `future` but error if it doesn't complete within `duration`.
     ///
-    /// `iso-tp` treats the error as a timeout signal and maps it to a [`crate::IsoTpError::Timeout`]
+    /// `can-iso-tp` treats the error as a timeout signal and maps it to a [`crate::IsoTpError::Timeout`]
     /// variant appropriate to the phase being executed.
     fn timeout<'a, F>(&'a self, duration: Duration, future: F) -> Self::Timeout<'a, F>
     where

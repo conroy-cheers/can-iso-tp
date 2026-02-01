@@ -1,6 +1,6 @@
-use iso_tp::pdu::Pdu;
-use iso_tp::rx::{RxBuffer, RxMachine, RxOutcome, RxState};
-use iso_tp::{IsoTpConfig, IsoTpError};
+use can_iso_tp::pdu::Pdu;
+use can_iso_tp::rx::{RxBuffer, RxMachine, RxOutcome, RxState};
+use can_iso_tp::{IsoTpConfig, IsoTpError};
 
 fn cfg_with_limits(max_payload_len: usize, rx_buffer_len: usize) -> IsoTpConfig {
     IsoTpConfig {

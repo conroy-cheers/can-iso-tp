@@ -1,12 +1,12 @@
 [package]
-name = "iso-tp"
+name = "can-iso-tp"
 description = "Generic implementation of the CAN ISO-TP protocol"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 keywords = ["io", "can", "embedded"]
-documentation = "https://docs.rs/iso-tp"
-repository = "https://github.com/conroy-cheers/iso-tp"
+documentation = "https://docs.rs/can-iso-tp"
+repository = "https://github.com/conroy-cheers/can-iso-tp"
 readme = "README.md"
 exclude = [".envrc", "*.nix", "flake.lock"]
 

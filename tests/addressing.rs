@@ -2,7 +2,7 @@ use embedded_can::ExtendedId;
 use embedded_can::StandardId;
 use embedded_can_interface::Id;
 
-use iso_tp::{IsoTpAddress, IsoTpConfig, RxAddress, TargetAddressType, TxAddress};
+use can_iso_tp::{IsoTpAddress, IsoTpConfig, RxAddress, TargetAddressType, TxAddress};
 
 fn std_id(raw: u16) -> Id {
     Id::Standard(StandardId::new(raw).unwrap())

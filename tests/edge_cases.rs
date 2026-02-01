@@ -1,8 +1,8 @@
+use can_iso_tp::pdu::{Pdu, encode};
+use can_iso_tp::{IsoTpConfig, IsoTpNode, Progress, TimeoutKind};
 use embedded_can::{Frame, StandardId};
 use embedded_can_interface::{Id, SplitTxRx};
 use embedded_can_mock::{BusHandle, MockCan, MockFrame};
-use iso_tp::pdu::{Pdu, encode};
-use iso_tp::{IsoTpConfig, IsoTpNode, Progress, TimeoutKind};
 use std::time::{Duration, Instant};
 
 fn cfg(tx: u16, rx: u16, block_size: u8, rx_buf: usize, max_len: usize) -> IsoTpConfig {
@@ -84,11 +84,11 @@ fn oversized_payload_triggers_overflow_on_both_sides() {
 
     let mut delivered = Vec::new();
     let recv_err = receiver.poll_recv(now, &mut |data| delivered = data.to_vec());
-    assert!(matches!(recv_err, Err(iso_tp::IsoTpError::RxOverflow)));
+    assert!(matches!(recv_err, Err(can_iso_tp::IsoTpError::RxOverflow)));
     assert!(delivered.is_empty());
 
     let send_err = sender.poll_send(&payload, now);
-    assert!(matches!(send_err, Err(iso_tp::IsoTpError::Overflow)));
+    assert!(matches!(send_err, Err(can_iso_tp::IsoTpError::Overflow)));
 }
 
 #[test]
@@ -117,7 +117,7 @@ fn flow_control_wait_exceeds_wft_max() {
 
     let res = sender.poll_send(&payload, now);
     match res {
-        Err(iso_tp::IsoTpError::Timeout(TimeoutKind::NBs)) => {}
+        Err(can_iso_tp::IsoTpError::Timeout(TimeoutKind::NBs)) => {}
         other => panic!("expected NBs timeout, got {:?}", other),
     }
 }
@@ -188,5 +188,5 @@ fn bad_sequence_number_is_rejected() {
     .unwrap();
     injector.transmit(cf_bad).unwrap();
     let err = receiver.poll_recv(Instant::now(), &mut |_| {});
-    assert!(matches!(err, Err(iso_tp::IsoTpError::BadSequence)));
+    assert!(matches!(err, Err(can_iso_tp::IsoTpError::BadSequence)));
 }

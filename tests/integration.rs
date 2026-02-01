@@ -1,7 +1,7 @@
+use can_iso_tp::{IsoTpConfig, IsoTpNode, Progress};
 use embedded_can::{Frame, StandardId};
 use embedded_can_interface::{Id, SplitTxRx};
 use embedded_can_mock::{BusHandle, MockCan, MockFrame};
-use iso_tp::{IsoTpConfig, IsoTpNode, Progress};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -374,7 +374,9 @@ fn blocking_recv_times_out_without_sender() {
     let err = receiver.recv(Duration::from_millis(50), &mut |_| {});
     assert!(matches!(
         err,
-        Err(iso_tp::IsoTpError::Timeout(iso_tp::TimeoutKind::NAr))
+        Err(can_iso_tp::IsoTpError::Timeout(
+            can_iso_tp::TimeoutKind::NAr
+        ))
     ));
 }
 
@@ -392,7 +394,9 @@ fn blocking_send_times_out_without_receiver_polling() {
     let err = sender.send(&payload, Duration::from_millis(50));
     assert!(matches!(
         err,
-        Err(iso_tp::IsoTpError::Timeout(iso_tp::TimeoutKind::NAs))
+        Err(can_iso_tp::IsoTpError::Timeout(
+            can_iso_tp::TimeoutKind::NAs
+        ))
     ));
 }
 
@@ -422,10 +426,10 @@ fn blocking_send_and_recv_report_overflow() {
     });
 
     let send_err = sender.send(&payload, Duration::from_secs(1));
-    assert!(matches!(send_err, Err(iso_tp::IsoTpError::Overflow)));
+    assert!(matches!(send_err, Err(can_iso_tp::IsoTpError::Overflow)));
 
     let recv_err = done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    assert!(matches!(recv_err, Err(iso_tp::IsoTpError::RxOverflow)));
+    assert!(matches!(recv_err, Err(can_iso_tp::IsoTpError::RxOverflow)));
 
     recv_thread.join().unwrap();
 }
