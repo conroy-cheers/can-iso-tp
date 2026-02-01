@@ -41,36 +41,59 @@ fn to_can_id(id: Id) -> embedded_can::Id {
     }
 }
 
+fn pci_offset_from_prefix(prefix: Option<u8>) -> usize {
+    usize::from(prefix.is_some())
+}
+
 /// Build a CAN frame representing the given PDU.
 pub fn encode<F: Frame>(id: Id, pdu: &Pdu<'_>, padding: Option<u8>) -> Result<F, IsoTpError<()>> {
+    encode_with_prefix(id, pdu, padding, None)
+}
+
+/// Build a CAN frame representing the given PDU with an optional addressing prefix byte.
+pub fn encode_with_prefix<F: Frame>(
+    id: Id,
+    pdu: &Pdu<'_>,
+    padding: Option<u8>,
+    prefix: Option<u8>,
+) -> Result<F, IsoTpError<()>> {
     let mut buf = [0u8; 8];
+    let offset = pci_offset_from_prefix(prefix);
+    if offset > 0 {
+        buf[0] = prefix.unwrap();
+    }
+
     let used = match pdu {
         Pdu::SingleFrame { len, data } => {
-            if *len as usize > 7 || *len as usize > data.len() {
+            if *len as usize > 7
+                || *len as usize > data.len()
+                || *len as usize > 7usize.saturating_sub(offset)
+            {
                 return Err(IsoTpError::InvalidFrame);
             }
-            buf[0] = *len & 0x0F;
-            let used = 1 + *len as usize;
-            buf[1..used].copy_from_slice(&data[..*len as usize]);
+            buf[offset] = *len & 0x0F;
+            let used = offset + 1 + *len as usize;
+            buf[offset + 1..used].copy_from_slice(&data[..*len as usize]);
             used
         }
         Pdu::FirstFrame { len, data } => {
-            if *len < 8 || *len > 4095 || data.is_empty() {
+            let min_len = 8u16.saturating_sub(offset as u16);
+            if *len < min_len || *len > 4095 || data.is_empty() {
                 return Err(IsoTpError::InvalidFrame);
             }
-            buf[0] = 0x10 | ((*len >> 8) as u8 & 0x0F);
-            buf[1] = (*len & 0xFF) as u8;
-            let data_len = data.len().min(6);
-            buf[2..2 + data_len].copy_from_slice(&data[..data_len]);
-            2 + data_len
+            buf[offset] = 0x10 | ((*len >> 8) as u8 & 0x0F);
+            buf[offset + 1] = (*len & 0xFF) as u8;
+            let data_len = data.len().min(6usize.saturating_sub(offset));
+            buf[offset + 2..offset + 2 + data_len].copy_from_slice(&data[..data_len]);
+            offset + 2 + data_len
         }
         Pdu::ConsecutiveFrame { sn, data } => {
-            if data.len() > 7 {
+            if data.len() > 7usize.saturating_sub(offset) {
                 return Err(IsoTpError::InvalidFrame);
             }
-            buf[0] = 0x20 | (*sn & 0x0F);
-            let used = 1 + data.len();
-            buf[1..used].copy_from_slice(data);
+            buf[offset] = 0x20 | (*sn & 0x0F);
+            let used = offset + 1 + data.len();
+            buf[offset + 1..used].copy_from_slice(data);
             used
         }
         Pdu::FlowControl {
@@ -83,10 +106,13 @@ pub fn encode<F: Frame>(id: Id, pdu: &Pdu<'_>, padding: Option<u8>) -> Result<F,
                 FlowStatus::Wait => 0x1,
                 FlowStatus::Overflow => 0x2,
             };
-            buf[0] = 0x30 | status_nibble;
-            buf[1] = *block_size;
-            buf[2] = *st_min;
-            3
+            if offset + 3 > 8 {
+                return Err(IsoTpError::InvalidFrame);
+            }
+            buf[offset] = 0x30 | status_nibble;
+            buf[offset + 1] = *block_size;
+            buf[offset + 2] = *st_min;
+            offset + 3
         }
     };
 
@@ -104,52 +130,63 @@ pub fn encode<F: Frame>(id: Id, pdu: &Pdu<'_>, padding: Option<u8>) -> Result<F,
 
 /// Decode raw CAN data into a PDU view.
 pub fn decode<'a>(data: &'a [u8]) -> Result<Pdu<'a>, IsoTpError<()>> {
-    if data.is_empty() {
+    decode_with_offset(data, 0)
+}
+
+/// Decode raw CAN data into a PDU view, interpreting the PCI at the provided byte offset.
+pub fn decode_with_offset<'a>(
+    data: &'a [u8],
+    pci_offset: usize,
+) -> Result<Pdu<'a>, IsoTpError<()>> {
+    if pci_offset > 1 || data.len() <= pci_offset {
         return Err(IsoTpError::InvalidFrame);
     }
-    let pci = data[0] >> 4;
+
+    let pci = data[pci_offset] >> 4;
     match pci {
         0x0 => {
-            let len = data[0] & 0x0F;
-            if len as usize > 7 || data.len() < 1 {
+            let len = data[pci_offset] & 0x0F;
+            if len as usize > 7 {
                 return Err(IsoTpError::InvalidFrame);
             }
             let payload_len = len as usize;
-            if data.len() < payload_len + 1 {
+            let payload_start = pci_offset + 1;
+            if data.len() < payload_start + payload_len {
                 return Err(IsoTpError::InvalidFrame);
             }
             Ok(Pdu::SingleFrame {
                 len,
-                data: &data[1..1 + payload_len],
+                data: &data[payload_start..payload_start + payload_len],
             })
         }
         0x1 => {
-            if data.len() < 2 {
+            if data.len() < pci_offset + 2 {
                 return Err(IsoTpError::InvalidFrame);
             }
-            let len = (((data[0] & 0x0F) as u16) << 8) | data[1] as u16;
-            if len < 8 || len > 4095 {
+            let len = (((data[pci_offset] & 0x0F) as u16) << 8) | data[pci_offset + 1] as u16;
+            let min_len = 8u16.saturating_sub(pci_offset as u16);
+            if len < min_len || len > 4095 {
                 return Err(IsoTpError::InvalidFrame);
             }
-            let available = data.len().saturating_sub(2);
-            let take = available.min(6);
+            let available = data.len().saturating_sub(pci_offset + 2);
+            let take = available.min(6usize.saturating_sub(pci_offset));
             Ok(Pdu::FirstFrame {
                 len,
-                data: &data[2..2 + take],
+                data: &data[pci_offset + 2..pci_offset + 2 + take],
             })
         }
         0x2 => {
-            let sn = data[0] & 0x0F;
+            let sn = data[pci_offset] & 0x0F;
             Ok(Pdu::ConsecutiveFrame {
                 sn,
-                data: &data[1..],
+                data: &data[pci_offset + 1..],
             })
         }
         0x3 => {
-            if data.len() < 3 {
+            if data.len() < pci_offset + 3 {
                 return Err(IsoTpError::InvalidFrame);
             }
-            let status = match data[0] & 0x0F {
+            let status = match data[pci_offset] & 0x0F {
                 0x0 => FlowStatus::ClearToSend,
                 0x1 => FlowStatus::Wait,
                 0x2 => FlowStatus::Overflow,
@@ -157,8 +194,8 @@ pub fn decode<'a>(data: &'a [u8]) -> Result<Pdu<'a>, IsoTpError<()>> {
             };
             Ok(Pdu::FlowControl {
                 status,
-                block_size: data[1],
-                st_min: data[2],
+                block_size: data[pci_offset + 1],
+                st_min: data[pci_offset + 2],
             })
         }
         _ => Err(IsoTpError::InvalidFrame),
@@ -180,7 +217,7 @@ pub fn duration_to_st_min(duration: Duration) -> u8 {
     if micros == 0 {
         return 0;
     }
-    if (100..=900).contains(&micros) && micros % 100 == 0 {
+    if (100..=900).contains(&micros) && micros.is_multiple_of(100) {
         return 0xF0 + (micros / 100) as u8;
     }
     let millis = duration.as_millis();

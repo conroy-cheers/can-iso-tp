@@ -10,6 +10,10 @@ pub struct IsoTpConfig {
     pub tx_id: Id,
     /// CAN identifier expected when receiving ISO-TP PDUs.
     pub rx_id: Id,
+    /// Optional first payload byte to prepend to transmitted frames (extended/mixed addressing).
+    pub tx_addr: Option<u8>,
+    /// Optional first payload byte expected on received frames (extended/mixed addressing).
+    pub rx_addr: Option<u8>,
     /// Number of consecutive frames allowed before requesting a new flow control (0 = unlimited).
     pub block_size: u8,
     /// Minimum separation time enforced between consecutive frames.
@@ -40,6 +44,8 @@ impl Default for IsoTpConfig {
         Self {
             tx_id: Id::Standard(embedded_can::StandardId::new(0).unwrap()),
             rx_id: Id::Standard(embedded_can::StandardId::new(0).unwrap()),
+            tx_addr: None,
+            rx_addr: None,
             block_size: 0,
             st_min: Duration::from_millis(0),
             wft_max: 0,
@@ -57,6 +63,7 @@ impl Default for IsoTpConfig {
 
 impl IsoTpConfig {
     /// Reject invalid limits or mirrored IDs.
+    #[allow(clippy::result_unit_err)]
     pub fn validate(&self) -> Result<(), ()> {
         if self.max_payload_len == 0 || self.max_payload_len > 4095 {
             return Err(());
@@ -64,9 +71,36 @@ impl IsoTpConfig {
         if self.rx_buffer_len < self.max_payload_len {
             return Err(());
         }
-        if self.tx_id == self.rx_id {
+        if self.tx_id == self.rx_id
+            && (self.tx_addr.is_none() || self.rx_addr.is_none() || self.tx_addr == self.rx_addr)
+        {
             return Err(());
         }
         Ok(())
+    }
+
+    /// Index within an outgoing CAN payload where the PCI starts.
+    pub fn tx_pci_offset(&self) -> usize {
+        usize::from(self.tx_addr.is_some())
+    }
+
+    /// Index within an incoming CAN payload where the PCI starts.
+    pub fn rx_pci_offset(&self) -> usize {
+        usize::from(self.rx_addr.is_some())
+    }
+
+    /// Max application bytes in a Single Frame under the configured transmit addressing.
+    pub fn max_single_frame_payload(&self) -> usize {
+        7usize.saturating_sub(self.tx_pci_offset())
+    }
+
+    /// Max application bytes carried in a First Frame under the configured transmit addressing.
+    pub fn max_first_frame_payload(&self) -> usize {
+        6usize.saturating_sub(self.tx_pci_offset())
+    }
+
+    /// Max application bytes carried in a Consecutive Frame under the configured transmit addressing.
+    pub fn max_consecutive_frame_payload(&self) -> usize {
+        7usize.saturating_sub(self.tx_pci_offset())
     }
 }

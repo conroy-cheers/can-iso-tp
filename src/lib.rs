@@ -6,20 +6,24 @@
 #[cfg(any(feature = "alloc", feature = "std"))]
 extern crate alloc;
 
-pub mod config;
+pub mod address;
 pub mod async_io;
 pub mod async_node;
+pub mod config;
 pub mod errors;
 pub mod pdu;
 pub mod rx;
 pub mod timer;
 pub mod tx;
 
-pub use config::IsoTpConfig;
+pub use address::{AsymmetricAddress, IsoTpAddress, RxAddress, TargetAddressType, TxAddress};
 pub use async_io::{AsyncRuntime, TimedOut};
 pub use async_node::IsoTpAsyncNode;
+pub use config::IsoTpConfig;
 pub use errors::{IsoTpError, TimeoutKind};
-pub use timer::{Clock, StdClock};
+pub use timer::Clock;
+#[cfg(feature = "std")]
+pub use timer::StdClock;
 pub use tx::Progress;
 
 use core::mem;
@@ -27,7 +31,9 @@ use core::time::Duration;
 use embedded_can::Frame;
 use embedded_can_interface::{Id, RxFrameIo, TxFrameIo};
 
-use pdu::{FlowStatus, Pdu, decode, duration_to_st_min, encode, st_min_to_duration};
+use pdu::{
+    FlowStatus, Pdu, decode_with_offset, duration_to_st_min, encode_with_prefix, st_min_to_duration,
+};
 use rx::{RxBuffer, RxMachine, RxOutcome};
 use tx::{TxSession, TxState};
 
@@ -147,8 +153,14 @@ where
             if !id_matches(frame.id(), &self.cfg.rx_id) {
                 continue;
             }
+            if let Some(expected) = self.cfg.rx_addr
+                && frame.data().first().copied() != Some(expected)
+            {
+                continue;
+            }
 
-            let pdu = decode(frame.data()).map_err(|_| IsoTpError::InvalidFrame)?;
+            let pdu = decode_with_offset(frame.data(), self.cfg.rx_pci_offset())
+                .map_err(|_| IsoTpError::InvalidFrame)?;
             if matches!(pdu, Pdu::FlowControl { .. }) {
                 continue;
             }
@@ -214,13 +226,14 @@ where
         payload: &[u8],
         now: C::Instant,
     ) -> Result<Progress, IsoTpError<Tx::Error>> {
-        if payload.len() <= 7 {
+        if payload.len() <= self.cfg.max_single_frame_payload() {
             let pdu = Pdu::SingleFrame {
                 len: payload.len() as u8,
                 data: payload,
             };
-            let frame = encode(self.cfg.tx_id, &pdu, self.cfg.padding)
-                .map_err(|_| IsoTpError::InvalidFrame)?;
+            let frame =
+                encode_with_prefix(self.cfg.tx_id, &pdu, self.cfg.padding, self.cfg.tx_addr)
+                    .map_err(|_| IsoTpError::InvalidFrame)?;
             self.tx.try_send(&frame).map_err(IsoTpError::LinkError)?;
             self.tx_state = TxState::Idle;
             return Ok(Progress::Completed);
@@ -229,13 +242,14 @@ where
         {
             let mut session = TxSession::new(payload.len(), self.cfg.block_size, self.cfg.st_min);
             let len = payload.len();
-            let chunk = payload.len().min(6);
+            let chunk = payload.len().min(self.cfg.max_first_frame_payload());
             let pdu = Pdu::FirstFrame {
                 len: len as u16,
                 data: &payload[..chunk],
             };
-            let frame = encode(self.cfg.tx_id, &pdu, self.cfg.padding)
-                .map_err(|_| IsoTpError::InvalidFrame)?;
+            let frame =
+                encode_with_prefix(self.cfg.tx_id, &pdu, self.cfg.padding, self.cfg.tx_addr)
+                    .map_err(|_| IsoTpError::InvalidFrame)?;
             self.tx.try_send(&frame).map_err(IsoTpError::LinkError)?;
 
             session.offset = chunk;
@@ -275,7 +289,13 @@ where
             if !id_matches(frame.id(), &self.cfg.rx_id) {
                 continue;
             }
-            let pdu = decode(frame.data()).map_err(|_| IsoTpError::InvalidFrame)?;
+            if let Some(expected) = self.cfg.rx_addr
+                && frame.data().first().copied() != Some(expected)
+            {
+                continue;
+            }
+            let pdu = decode_with_offset(frame.data(), self.cfg.rx_pci_offset())
+                .map_err(|_| IsoTpError::InvalidFrame)?;
             match pdu {
                 Pdu::FlowControl {
                     status,
@@ -286,15 +306,16 @@ where
                         session.wait_count = 0;
                         let bs = if block_size == 0 {
                             self.cfg.block_size
-                    } else {
-                        block_size
-                    };
-                    session.block_size = bs;
-                    session.block_remaining = bs;
-                    session.st_min = st_min_to_duration(st_min).unwrap_or(self.cfg.st_min);
-                    return self.continue_send(payload, session, None, now);
+                        } else {
+                            block_size
+                        };
+                        session.block_size = bs;
+                        session.block_remaining = bs;
+                        session.st_min = st_min_to_duration(st_min).unwrap_or(self.cfg.st_min);
+                        return self.continue_send(payload, session, None, now);
                     }
                     FlowStatus::Wait => {
+                        #[cfg(feature = "std")]
                         if cfg!(debug_assertions) {
                             println!("DEBUG wait_count before {}", session.wait_count);
                         }
@@ -332,14 +353,14 @@ where
             self.tx_state = TxState::Idle;
             return Err(IsoTpError::NotIdle);
         }
-        if let Some(deadline) = st_min_deadline {
-            if now < deadline {
-                self.tx_state = TxState::Sending {
-                    session,
-                    st_min_deadline: Some(deadline),
-                };
-                return Ok(Progress::WouldBlock);
-            }
+        if let Some(deadline) = st_min_deadline
+            && now < deadline
+        {
+            self.tx_state = TxState::Sending {
+                session,
+                st_min_deadline: Some(deadline),
+            };
+            return Ok(Progress::WouldBlock);
         }
 
         if session.offset >= session.payload_len {
@@ -348,14 +369,14 @@ where
         }
 
         let remaining = session.payload_len - session.offset;
-        let chunk = remaining.min(7);
+        let chunk = remaining.min(self.cfg.max_consecutive_frame_payload());
         let data = &payload[session.offset..session.offset + chunk];
         let pdu = Pdu::ConsecutiveFrame {
             sn: session.next_sn & 0x0F,
             data,
         };
-        let frame =
-            encode(self.cfg.tx_id, &pdu, self.cfg.padding).map_err(|_| IsoTpError::InvalidFrame)?;
+        let frame = encode_with_prefix(self.cfg.tx_id, &pdu, self.cfg.padding, self.cfg.tx_addr)
+            .map_err(|_| IsoTpError::InvalidFrame)?;
         self.tx.try_send(&frame).map_err(IsoTpError::LinkError)?;
 
         session.offset += chunk;
@@ -399,8 +420,8 @@ where
             block_size,
             st_min,
         };
-        let frame =
-            encode(self.cfg.tx_id, &fc, self.cfg.padding).map_err(|_| IsoTpError::InvalidFrame)?;
+        let frame = encode_with_prefix(self.cfg.tx_id, &fc, self.cfg.padding, self.cfg.tx_addr)
+            .map_err(|_| IsoTpError::InvalidFrame)?;
         self.tx.try_send(&frame).map_err(IsoTpError::LinkError)?;
         Ok(())
     }
@@ -426,18 +447,17 @@ fn build_buffer<'a>(
         if buf.len() < len {
             return Err(IsoTpError::InvalidConfig);
         }
-        return Ok(RxBuffer::Borrowed(&mut buf[..len]));
-    }
-    #[cfg(any(feature = "alloc", feature = "std"))]
-    {
-        let mut buf = Vec::new();
-        buf.resize(len, 0);
-        return Ok(RxBuffer::Owned(buf));
-    }
-    #[cfg(not(any(feature = "alloc", feature = "std")))]
-    {
-        let _ = len;
-        Err(IsoTpError::InvalidConfig)
+        Ok(RxBuffer::Borrowed(&mut buf[..len]))
+    } else {
+        #[cfg(any(feature = "alloc", feature = "std"))]
+        {
+            Ok(RxBuffer::Owned(vec![0; len]))
+        }
+        #[cfg(not(any(feature = "alloc", feature = "std")))]
+        {
+            let _ = len;
+            Err(IsoTpError::InvalidConfig)
+        }
     }
 }
 

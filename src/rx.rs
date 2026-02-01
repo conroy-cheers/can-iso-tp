@@ -4,7 +4,7 @@ use core::cmp::min;
 
 use crate::config::IsoTpConfig;
 use crate::errors::IsoTpError;
-use crate::pdu::{duration_to_st_min, FlowStatus, Pdu};
+use crate::pdu::{FlowStatus, Pdu, duration_to_st_min};
 
 #[cfg(any(feature = "alloc", feature = "std"))]
 use alloc::vec::Vec;
@@ -29,6 +29,7 @@ impl<'a> RxBuffer<'a> {
     }
 
     /// Mutable view of the buffer.
+    #[allow(clippy::should_implement_trait)]
     pub fn as_mut(&mut self) -> &mut [u8] {
         match self {
             RxBuffer::Borrowed(buf) => buf,
@@ -229,6 +230,16 @@ impl<'a> AsRef<[u8]> for RxBuffer<'a> {
             RxBuffer::Borrowed(buf) => buf,
             #[cfg(any(feature = "alloc", feature = "std"))]
             RxBuffer::Owned(buf) => buf.as_slice(),
+        }
+    }
+}
+
+impl<'a> AsMut<[u8]> for RxBuffer<'a> {
+    fn as_mut(&mut self) -> &mut [u8] {
+        match self {
+            RxBuffer::Borrowed(buf) => buf,
+            #[cfg(any(feature = "alloc", feature = "std"))]
+            RxBuffer::Owned(buf) => buf.as_mut_slice(),
         }
     }
 }

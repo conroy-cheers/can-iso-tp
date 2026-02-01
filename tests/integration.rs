@@ -10,6 +10,8 @@ fn cfg(tx: u16, rx: u16, block_size: u8) -> IsoTpConfig {
     IsoTpConfig {
         tx_id: Id::Standard(StandardId::new(tx).unwrap()),
         rx_id: Id::Standard(StandardId::new(rx).unwrap()),
+        tx_addr: None,
+        rx_addr: None,
         block_size,
         st_min: Duration::from_millis(0),
         wft_max: 3,
@@ -52,6 +54,61 @@ fn single_frame_roundtrip() {
 }
 
 #[test]
+fn extended_addressing_roundtrip_payload_len_7() {
+    let bus = BusHandle::new();
+    let can_a = MockCan::new_with_bus(&bus, vec![]).unwrap();
+    let can_b = MockCan::new_with_bus(&bus, vec![]).unwrap();
+
+    let (tx_a, rx_a) = can_a.split();
+    let (tx_b, rx_b) = can_b.split();
+
+    let mut cfg_a = cfg(0x120, 0x121, 0);
+    cfg_a.tx_addr = Some(0xAA);
+    cfg_a.rx_addr = Some(0x55);
+    let mut cfg_b = cfg(0x121, 0x120, 0);
+    cfg_b.tx_addr = Some(0x55);
+    cfg_b.rx_addr = Some(0xAA);
+
+    let mut sender = IsoTpNode::with_std_clock(tx_a, rx_a, cfg_a).unwrap();
+    let mut receiver = IsoTpNode::with_std_clock(tx_b, rx_b, cfg_b).unwrap();
+
+    let payload = [1u8, 2, 3, 4, 5, 6, 7];
+    let mut delivered = Vec::new();
+    let start = Instant::now();
+    let mut send_done = false;
+    let mut recv_done = false;
+    let mut iterations = 0;
+
+    while !(send_done && recv_done) {
+        iterations += 1;
+        assert!(iterations < 1000, "state machine stuck");
+        let now = Instant::now();
+
+        if !send_done
+            && matches!(
+                sender.poll_send(&payload, now).expect("send progress"),
+                Progress::Completed
+            )
+        {
+            send_done = true;
+        }
+
+        match receiver.poll_recv(now, &mut |data| delivered = data.to_vec()) {
+            Ok(Progress::Completed) => recv_done = true,
+            Ok(_) => {}
+            Err(err) => panic!("recv error: {:?}", err),
+        }
+
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "timeout waiting for completion"
+        );
+    }
+
+    assert_eq!(payload.to_vec(), delivered);
+}
+
+#[test]
 fn multi_frame_flow_control_path() {
     let bus = BusHandle::new();
     let can_a = MockCan::new_with_bus(&bus, vec![]).unwrap();
@@ -75,11 +132,13 @@ fn multi_frame_flow_control_path() {
         iterations += 1;
         assert!(iterations < 1000, "state machine stuck");
         let now = Instant::now();
-        if !send_done {
-            match sender.poll_send(&payload, now).expect("send progress") {
-                Progress::Completed => send_done = true,
-                _ => {}
-            }
+        if !send_done
+            && matches!(
+                sender.poll_send(&payload, now).expect("send progress"),
+                Progress::Completed
+            )
+        {
+            send_done = true;
         }
         match receiver.poll_recv(now, &mut |data| delivered = data.to_vec()) {
             Ok(Progress::Completed) => recv_done = true,
@@ -127,11 +186,13 @@ fn long_payload_over_multiple_nodes() {
         assert!(iterations < 5000, "state machine stuck");
         let now = Instant::now();
 
-        if !send_done {
-            match sender.poll_send(&payload, now).expect("send long progress") {
-                Progress::Completed => send_done = true,
-                _ => {}
-            }
+        if !send_done
+            && matches!(
+                sender.poll_send(&payload, now).expect("send long progress"),
+                Progress::Completed
+            )
+        {
+            send_done = true;
         }
         if !recv_b_done {
             match receiver_b.poll_recv(now, &mut |data| delivered_b = data.to_vec()) {
@@ -185,15 +246,19 @@ fn back_to_back_long_messages() {
         let now = Instant::now();
 
         if !send1_done {
-            match sender.poll_send(&payload1, now).expect("send1 poll") {
-                Progress::Completed => send1_done = true,
-                _ => {}
+            if matches!(
+                sender.poll_send(&payload1, now).expect("send1 poll"),
+                Progress::Completed
+            ) {
+                send1_done = true;
             }
-        } else if !send2_done {
-            match sender.poll_send(&payload2, now).expect("send2 poll") {
-                Progress::Completed => send2_done = true,
-                _ => {}
-            }
+        } else if !send2_done
+            && matches!(
+                sender.poll_send(&payload2, now).expect("send2 poll"),
+                Progress::Completed
+            )
+        {
+            send2_done = true;
         }
 
         match receiver.poll_recv(now, &mut |data| delivered.push(data.to_vec())) {
@@ -245,11 +310,13 @@ fn bus_contention_with_noise_frames() {
             noise.transmit(noise_frame).unwrap();
         }
 
-        if !send_done {
-            match sender.poll_send(&payload, now).expect("send poll") {
-                Progress::Completed => send_done = true,
-                _ => {}
-            }
+        if !send_done
+            && matches!(
+                sender.poll_send(&payload, now).expect("send poll"),
+                Progress::Completed
+            )
+        {
+            send_done = true;
         }
 
         match receiver.poll_recv(now, &mut |data| delivered = data.to_vec()) {
@@ -280,7 +347,9 @@ fn blocking_multi_frame_roundtrip() {
 
     let recv_thread = thread::spawn(move || {
         let mut delivered = Vec::new();
-        let res = receiver.recv(Duration::from_secs(2), &mut |data| delivered = data.to_vec());
+        let res = receiver.recv(Duration::from_secs(2), &mut |data| {
+            delivered = data.to_vec()
+        });
         done_tx.send((res, delivered)).unwrap();
     });
 
@@ -303,7 +372,10 @@ fn blocking_recv_times_out_without_sender() {
     let mut receiver = IsoTpNode::with_std_clock(tx, rx, cfg(0x682, 0x683, 0)).unwrap();
 
     let err = receiver.recv(Duration::from_millis(50), &mut |_| {});
-    assert!(matches!(err, Err(iso_tp::IsoTpError::Timeout(iso_tp::TimeoutKind::NAr))));
+    assert!(matches!(
+        err,
+        Err(iso_tp::IsoTpError::Timeout(iso_tp::TimeoutKind::NAr))
+    ));
 }
 
 #[test]
@@ -318,7 +390,10 @@ fn blocking_send_times_out_without_receiver_polling() {
 
     let payload: Vec<u8> = (0..64u16).map(|v| (v & 0xFF) as u8).collect();
     let err = sender.send(&payload, Duration::from_millis(50));
-    assert!(matches!(err, Err(iso_tp::IsoTpError::Timeout(iso_tp::TimeoutKind::NAs))));
+    assert!(matches!(
+        err,
+        Err(iso_tp::IsoTpError::Timeout(iso_tp::TimeoutKind::NAs))
+    ));
 }
 
 #[test]
@@ -389,17 +464,21 @@ fn two_parallel_transfers_share_bus() {
         assert!(iterations < 5000, "parallel transfers stuck");
         let now = Instant::now();
 
-        if !send1_done {
-            match sender1.poll_send(&payload1, now).expect("sender1 poll") {
-                Progress::Completed => send1_done = true,
-                _ => {}
-            }
+        if !send1_done
+            && matches!(
+                sender1.poll_send(&payload1, now).expect("sender1 poll"),
+                Progress::Completed
+            )
+        {
+            send1_done = true;
         }
-        if !send2_done {
-            match sender2.poll_send(&payload2, now).expect("sender2 poll") {
-                Progress::Completed => send2_done = true,
-                _ => {}
-            }
+        if !send2_done
+            && matches!(
+                sender2.poll_send(&payload2, now).expect("sender2 poll"),
+                Progress::Completed
+            )
+        {
+            send2_done = true;
         }
 
         match receiver1.poll_recv(now, &mut |data| delivered1 = data.to_vec()) {

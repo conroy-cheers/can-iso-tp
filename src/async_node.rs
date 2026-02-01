@@ -7,7 +7,9 @@ use embedded_can_interface::{AsyncRxFrameIo, AsyncTxFrameIo};
 
 use crate::async_io::AsyncRuntime;
 use crate::errors::{IsoTpError, TimeoutKind};
-use crate::pdu::{FlowStatus, Pdu, decode, duration_to_st_min, encode, st_min_to_duration};
+use crate::pdu::{
+    FlowStatus, Pdu, decode_with_offset, duration_to_st_min, encode_with_prefix, st_min_to_duration,
+};
 use crate::rx::{RxMachine, RxOutcome};
 use crate::timer::Clock;
 use crate::{IsoTpConfig, id_matches};
@@ -68,19 +70,20 @@ where
             return Err(IsoTpError::Timeout(TimeoutKind::NAs));
         }
 
-        if payload.len() <= 7 {
+        if payload.len() <= self.cfg.max_single_frame_payload() {
             let pdu = Pdu::SingleFrame {
                 len: payload.len() as u8,
                 data: payload,
             };
             let frame =
-                encode(self.cfg.tx_id, &pdu, self.cfg.padding).map_err(|_| IsoTpError::InvalidFrame)?;
+                encode_with_prefix(self.cfg.tx_id, &pdu, self.cfg.padding, self.cfg.tx_addr)
+                    .map_err(|_| IsoTpError::InvalidFrame)?;
             self.send_frame(rt, start, timeout, TimeoutKind::NAs, &frame)
                 .await?;
             return Ok(());
         }
 
-        let mut offset = payload.len().min(6);
+        let mut offset = payload.len().min(self.cfg.max_first_frame_payload());
         let mut next_sn: u8 = 1;
         let wait_count: u8 = 0;
 
@@ -88,24 +91,24 @@ where
             len: payload.len() as u16,
             data: &payload[..offset],
         };
-        let frame =
-            encode(self.cfg.tx_id, &pdu, self.cfg.padding).map_err(|_| IsoTpError::InvalidFrame)?;
+        let frame = encode_with_prefix(self.cfg.tx_id, &pdu, self.cfg.padding, self.cfg.tx_addr)
+            .map_err(|_| IsoTpError::InvalidFrame)?;
         self.send_frame(rt, start, timeout, TimeoutKind::NAs, &frame)
             .await?;
 
         let fc_start = self.clock.now();
-        let (mut block_size, mut st_min, mut wait_count) =
-            self.wait_for_flow_control(rt, start, timeout, fc_start, wait_count)
-                .await?;
+        let (mut block_size, mut st_min, mut wait_count) = self
+            .wait_for_flow_control(rt, start, timeout, fc_start, wait_count)
+            .await?;
         let mut block_remaining = block_size;
 
         let mut last_cf_sent: Option<C::Instant> = None;
         while offset < payload.len() {
             if block_size > 0 && block_remaining == 0 {
                 let fc_start = self.clock.now();
-                let (new_bs, new_st_min, new_wait_count) =
-                    self.wait_for_flow_control(rt, start, timeout, fc_start, wait_count)
-                        .await?;
+                let (new_bs, new_st_min, new_wait_count) = self
+                    .wait_for_flow_control(rt, start, timeout, fc_start, wait_count)
+                    .await?;
                 block_size = new_bs;
                 block_remaining = new_bs;
                 st_min = new_st_min;
@@ -123,13 +126,14 @@ where
             }
 
             let remaining = payload.len() - offset;
-            let chunk = remaining.min(7);
+            let chunk = remaining.min(self.cfg.max_consecutive_frame_payload());
             let pdu = Pdu::ConsecutiveFrame {
                 sn: next_sn & 0x0F,
                 data: &payload[offset..offset + chunk],
             };
             let frame =
-                encode(self.cfg.tx_id, &pdu, self.cfg.padding).map_err(|_| IsoTpError::InvalidFrame)?;
+                encode_with_prefix(self.cfg.tx_id, &pdu, self.cfg.padding, self.cfg.tx_addr)
+                    .map_err(|_| IsoTpError::InvalidFrame)?;
             self.send_frame(rt, start, timeout, TimeoutKind::NAs, &frame)
                 .await?;
 
@@ -155,13 +159,21 @@ where
         let start = self.clock.now();
 
         loop {
-            let frame = self.recv_frame(rt, start, timeout, TimeoutKind::NAr).await?;
+            let frame = self
+                .recv_frame(rt, start, timeout, TimeoutKind::NAr)
+                .await?;
 
             if !id_matches(frame.id(), &self.cfg.rx_id) {
                 continue;
             }
+            if let Some(expected) = self.cfg.rx_addr
+                && frame.data().first().copied() != Some(expected)
+            {
+                continue;
+            }
 
-            let pdu = decode(frame.data()).map_err(|_| IsoTpError::InvalidFrame)?;
+            let pdu = decode_with_offset(frame.data(), self.cfg.rx_pci_offset())
+                .map_err(|_| IsoTpError::InvalidFrame)?;
             if matches!(pdu, Pdu::FlowControl { .. }) {
                 continue;
             }
@@ -234,8 +246,14 @@ where
             if !id_matches(frame.id(), &self.cfg.rx_id) {
                 continue;
             }
+            if let Some(expected) = self.cfg.rx_addr
+                && frame.data().first().copied() != Some(expected)
+            {
+                continue;
+            }
 
-            let pdu = decode(frame.data()).map_err(|_| IsoTpError::InvalidFrame)?;
+            let pdu = decode_with_offset(frame.data(), self.cfg.rx_pci_offset())
+                .map_err(|_| IsoTpError::InvalidFrame)?;
             match pdu {
                 Pdu::FlowControl {
                     status,
@@ -280,8 +298,8 @@ where
             block_size,
             st_min,
         };
-        let frame =
-            encode(self.cfg.tx_id, &fc, self.cfg.padding).map_err(|_| IsoTpError::InvalidFrame)?;
+        let frame = encode_with_prefix(self.cfg.tx_id, &fc, self.cfg.padding, self.cfg.tx_addr)
+            .map_err(|_| IsoTpError::InvalidFrame)?;
         self.send_frame(rt, start, timeout, TimeoutKind::NAs, &frame)
             .await?;
         Ok(())
@@ -409,7 +427,8 @@ mod tests {
     impl AsyncRuntime for TestRuntime {
         type TimeoutError = ();
 
-        type Sleep<'a> = core::future::Ready<()>
+        type Sleep<'a>
+            = core::future::Ready<()>
         where
             Self: 'a;
 
@@ -418,7 +437,8 @@ mod tests {
             core::future::ready(())
         }
 
-        type Timeout<'a, F> = Pin<Box<dyn Future<Output = Result<F::Output, Self::TimeoutError>> + 'a>>
+        type Timeout<'a, F>
+            = Pin<Box<dyn Future<Output = Result<F::Output, Self::TimeoutError>> + 'a>>
         where
             Self: 'a,
             F: Future + 'a;
@@ -488,5 +508,12 @@ mod tests {
 
         let sleeps = rt.sleeps.lock().unwrap().clone();
         assert!(sleeps.is_empty());
+    }
+
+    #[test]
+    fn test_clock_now_and_add_are_exercised() {
+        let clock = TestClock { now_ms: 5 };
+        assert_eq!(clock.now(), 5);
+        assert_eq!(clock.add(10, Duration::from_millis(7)), 17);
     }
 }

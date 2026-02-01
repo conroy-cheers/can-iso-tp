@@ -9,6 +9,8 @@ fn cfg(tx: u16, rx: u16, block_size: u8, rx_buf: usize, max_len: usize) -> IsoTp
     IsoTpConfig {
         tx_id: Id::Standard(StandardId::new(tx).unwrap()),
         rx_id: Id::Standard(StandardId::new(rx).unwrap()),
+        tx_addr: None,
+        rx_addr: None,
         block_size,
         st_min: Duration::from_millis(0),
         wft_max: 2,

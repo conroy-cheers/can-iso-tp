@@ -37,10 +37,7 @@ impl TokioBus {
     async fn add_interface(self: &Arc<Self>) -> (TokioTx, TokioRx) {
         let (tx, rx) = mpsc::unbounded_channel();
         self.peers.lock().await.push(tx);
-        (
-            TokioTx { bus: self.clone() },
-            TokioRx { rx },
-        )
+        (TokioTx { bus: self.clone() }, TokioRx { rx })
     }
 
     async fn transmit(&self, frame: MockFrame) {
@@ -107,7 +104,8 @@ struct TokioRt;
 impl AsyncRuntime for TokioRt {
     type TimeoutError = tokio::time::error::Elapsed;
 
-    type Sleep<'a> = tokio::time::Sleep
+    type Sleep<'a>
+        = tokio::time::Sleep
     where
         Self: 'a;
 
@@ -115,7 +113,8 @@ impl AsyncRuntime for TokioRt {
         tokio::time::sleep(duration)
     }
 
-    type Timeout<'a, F> = tokio::time::Timeout<F>
+    type Timeout<'a, F>
+        = tokio::time::Timeout<F>
     where
         Self: 'a,
         F: core::future::Future + 'a;
@@ -166,12 +165,19 @@ async fn async_single_frame_roundtrip() {
     let recv_fut = async {
         let mut delivered = Vec::new();
         node_b
-            .recv(&rt, Duration::from_millis(200), &mut |data| delivered = data.to_vec())
+            .recv(&rt, Duration::from_millis(200), &mut |data| {
+                delivered = data.to_vec()
+            })
             .await
             .unwrap();
         delivered
     };
-    let send_fut = async { node_a.send(&rt, payload, Duration::from_millis(200)).await.unwrap() };
+    let send_fut = async {
+        node_a
+            .send(&rt, payload, Duration::from_millis(200))
+            .await
+            .unwrap()
+    };
 
     let (delivered, ()) = tokio::join!(recv_fut, send_fut);
     assert_eq!(delivered, payload);
@@ -193,13 +199,19 @@ async fn async_multi_frame_roundtrip() {
     let recv_fut = async {
         let mut delivered = Vec::new();
         node_b
-            .recv(&rt, Duration::from_millis(500), &mut |data| delivered = data.to_vec())
+            .recv(&rt, Duration::from_millis(500), &mut |data| {
+                delivered = data.to_vec()
+            })
             .await
             .unwrap();
         delivered
     };
-    let send_fut =
-        async { node_a.send(&rt, &payload, Duration::from_millis(500)).await.unwrap() };
+    let send_fut = async {
+        node_a
+            .send(&rt, &payload, Duration::from_millis(500))
+            .await
+            .unwrap()
+    };
 
     let (delivered, ()) = tokio::join!(recv_fut, send_fut);
     assert_eq!(delivered, payload);
@@ -213,7 +225,7 @@ async fn async_block_size_requires_multiple_flow_controls() {
 
     let (cfg_a, mut cfg_b) = cfg_pair(0x600, 0x601);
     cfg_b.block_size = 1;
-    let fc_id = to_can_id(cfg_b.tx_id.clone());
+    let fc_id = to_can_id(cfg_b.tx_id);
 
     let mut node_a = IsoTpAsyncNode::with_std_clock(tx_a, rx_a, cfg_a).unwrap();
     let mut node_b = IsoTpAsyncNode::with_std_clock(tx_b, rx_b, cfg_b).unwrap();
@@ -224,13 +236,19 @@ async fn async_block_size_requires_multiple_flow_controls() {
     let recv_fut = async {
         let mut delivered = Vec::new();
         node_b
-            .recv(&rt, Duration::from_millis(800), &mut |data| delivered = data.to_vec())
+            .recv(&rt, Duration::from_millis(800), &mut |data| {
+                delivered = data.to_vec()
+            })
             .await
             .unwrap();
         delivered
     };
-    let send_fut =
-        async { node_a.send(&rt, &payload, Duration::from_millis(800)).await.unwrap() };
+    let send_fut = async {
+        node_a
+            .send(&rt, &payload, Duration::from_millis(800))
+            .await
+            .unwrap()
+    };
 
     let (delivered, ()) = tokio::join!(recv_fut, send_fut);
     assert_eq!(delivered, payload);
@@ -255,7 +273,7 @@ async fn async_st_min_enforced_between_consecutive_frames() {
     let (tx_b, rx_b) = bus.add_interface().await;
 
     let (cfg_a, mut cfg_b) = cfg_pair(0x610, 0x611);
-    let tx_id_a = to_can_id(cfg_a.tx_id.clone());
+    let tx_id_a = to_can_id(cfg_a.tx_id);
     let st_min = Duration::from_millis(100);
     cfg_b.st_min = st_min;
 
@@ -268,12 +286,19 @@ async fn async_st_min_enforced_between_consecutive_frames() {
     let recv_fut = async {
         let mut delivered = Vec::new();
         node_b
-            .recv(&rt, Duration::from_secs(2), &mut |data| delivered = data.to_vec())
+            .recv(&rt, Duration::from_secs(2), &mut |data| {
+                delivered = data.to_vec()
+            })
             .await
             .unwrap();
         delivered
     };
-    let send_fut = async { node_a.send(&rt, &payload, Duration::from_secs(2)).await.unwrap() };
+    let send_fut = async {
+        node_a
+            .send(&rt, &payload, Duration::from_secs(2))
+            .await
+            .unwrap()
+    };
 
     let (delivered, ()) = tokio::join!(recv_fut, send_fut);
     assert_eq!(delivered, payload);
@@ -295,7 +320,9 @@ async fn async_st_min_enforced_between_consecutive_frames() {
     );
 
     let delta = consecutive_times[1].duration_since(consecutive_times[0]);
-    let min_expected = st_min.checked_sub(Duration::from_millis(10)).unwrap_or_default();
+    let min_expected = st_min
+        .checked_sub(Duration::from_millis(10))
+        .unwrap_or_default();
     assert!(
         delta >= min_expected,
         "CF pacing too fast: delta={:?} st_min={:?}",
@@ -320,7 +347,10 @@ async fn async_send_times_out_waiting_for_flow_control_nbs() {
         .send(&rt, &payload, Duration::from_millis(800))
         .await
         .unwrap_err();
-    assert!(matches!(err, iso_tp::IsoTpError::Timeout(iso_tp::TimeoutKind::NBs)));
+    assert!(matches!(
+        err,
+        iso_tp::IsoTpError::Timeout(iso_tp::TimeoutKind::NBs)
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -339,7 +369,10 @@ async fn async_send_times_out_waiting_for_flow_control_nas() {
         .send(&rt, &payload, Duration::from_millis(120))
         .await
         .unwrap_err();
-    assert!(matches!(err, iso_tp::IsoTpError::Timeout(iso_tp::TimeoutKind::NAs)));
+    assert!(matches!(
+        err,
+        iso_tp::IsoTpError::Timeout(iso_tp::TimeoutKind::NAs)
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -376,7 +409,10 @@ async fn async_recv_times_out_nar_even_with_noise_and_flow_control_frames() {
         .recv(&rt, Duration::from_millis(150), &mut |_| {})
         .await
         .unwrap_err();
-    assert!(matches!(err, iso_tp::IsoTpError::Timeout(iso_tp::TimeoutKind::NAr)));
+    assert!(matches!(
+        err,
+        iso_tp::IsoTpError::Timeout(iso_tp::TimeoutKind::NAr)
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
