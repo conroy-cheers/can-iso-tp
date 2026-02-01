@@ -17,7 +17,9 @@ pub enum FlowStatus {
     Overflow,
 }
 
-/// Parsed ISO-TP PDU.
+/// Parsed ISO-TP Protocol Data Unit (PDU).
+///
+/// This enum is used by the encoder/decoder and by the send/receive state machines.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pdu<'a> {
     /// Single Frame payload.
@@ -28,8 +30,11 @@ pub enum Pdu<'a> {
     ConsecutiveFrame { sn: u8, data: &'a [u8] },
     /// Flow Control feedback.
     FlowControl {
+        /// Flow status from receiver to sender.
         status: FlowStatus,
+        /// Block size requested by receiver (0 = unlimited).
         block_size: u8,
+        /// STmin (encoded byte form, not a `Duration`).
         st_min: u8,
     },
 }
@@ -46,11 +51,17 @@ fn pci_offset_from_prefix(prefix: Option<u8>) -> usize {
 }
 
 /// Build a CAN frame representing the given PDU.
+///
+/// This uses “normal addressing” (no addressing prefix byte). For extended/mixed addressing, use
+/// [`encode_with_prefix`].
 pub fn encode<F: Frame>(id: Id, pdu: &Pdu<'_>, padding: Option<u8>) -> Result<F, IsoTpError<()>> {
     encode_with_prefix(id, pdu, padding, None)
 }
 
 /// Build a CAN frame representing the given PDU with an optional addressing prefix byte.
+///
+/// - `prefix = None` means the PCI starts at byte 0.
+/// - `prefix = Some(x)` means byte 0 is the addressing byte and the PCI starts at byte 1.
 pub fn encode_with_prefix<F: Frame>(
     id: Id,
     pdu: &Pdu<'_>,
@@ -129,11 +140,17 @@ pub fn encode_with_prefix<F: Frame>(
 }
 
 /// Decode raw CAN data into a PDU view.
+///
+/// This interprets the PCI at byte offset 0. For extended/mixed addressing, use
+/// [`decode_with_offset`] with `pci_offset = 1`.
 pub fn decode<'a>(data: &'a [u8]) -> Result<Pdu<'a>, IsoTpError<()>> {
     decode_with_offset(data, 0)
 }
 
 /// Decode raw CAN data into a PDU view, interpreting the PCI at the provided byte offset.
+///
+/// `pci_offset` is expected to be 0 (normal addressing) or 1 (extended/mixed addressing). Other
+/// offsets are rejected.
 pub fn decode_with_offset<'a>(
     data: &'a [u8],
     pci_offset: usize,

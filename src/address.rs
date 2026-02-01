@@ -18,30 +18,47 @@ pub enum TargetAddressType {
 /// Transmit addressing parameters (CAN ID + optional first payload byte).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TxAddress {
+    /// CAN identifier used for transmission.
     pub id: Id,
+    /// Optional ISO-TP addressing byte that is placed at the start of the CAN payload.
+    ///
+    /// When set, the Protocol Control Information (PCI) starts at byte offset 1.
     pub addr: Option<u8>,
 }
 
 /// Receive addressing parameters (CAN ID + optional expected first payload byte).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RxAddress {
+    /// CAN identifier expected when receiving.
     pub id: Id,
+    /// Optional ISO-TP addressing byte that must match the first payload byte.
+    ///
+    /// When set, the Protocol Control Information (PCI) is expected at byte offset 1.
     pub addr: Option<u8>,
 }
 
 /// Combine a transmit and receive addressing scheme (asymmetric addressing).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AsymmetricAddress {
+    /// Transmit addressing parameters.
     pub tx: TxAddress,
+    /// Receive addressing parameters.
     pub rx: RxAddress,
 }
 
 /// Addressing parameters for a single ISO-TP node.
+///
+/// This is a convenient “fully expanded” form that can be converted into an [`IsoTpConfig`] via
+/// `IsoTpConfig::from(IsoTpAddress)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IsoTpAddress {
+    /// Transmit CAN identifier.
     pub tx_id: Id,
+    /// Receive CAN identifier.
     pub rx_id: Id,
+    /// Optional transmit addressing byte.
     pub tx_addr: Option<u8>,
+    /// Optional receive addressing byte.
     pub rx_addr: Option<u8>,
 }
 
@@ -59,10 +76,12 @@ fn fixed_base(target_type: TargetAddressType, physical_base: u32, functional_bas
 }
 
 impl TxAddress {
+    /// Normal addressing (no extra addressing byte).
     pub fn normal(id: Id) -> Self {
         Self { id, addr: None }
     }
 
+    /// Extended addressing (adds a target address byte when sending).
     pub fn extended(id: Id, target_address: u8) -> Self {
         Self {
             id,
@@ -70,6 +89,7 @@ impl TxAddress {
         }
     }
 
+    /// Mixed 11-bit addressing (adds an address extension byte when sending).
     pub fn mixed_11(id: Id, address_extension: u8) -> Self {
         Self {
             id,
@@ -77,6 +97,9 @@ impl TxAddress {
         }
     }
 
+    /// Normal fixed 29-bit addressing.
+    ///
+    /// This constructs a 29-bit CAN ID according to ISO-TP’s fixed addressing scheme.
     pub fn normal_fixed_29(
         source_address: u8,
         target_address: u8,
@@ -90,6 +113,7 @@ impl TxAddress {
         })
     }
 
+    /// Mixed 29-bit addressing (fixed CAN ID + address extension byte).
     pub fn mixed_29(
         source_address: u8,
         target_address: u8,
@@ -106,10 +130,12 @@ impl TxAddress {
 }
 
 impl RxAddress {
+    /// Normal addressing (no extra addressing byte).
     pub fn normal(id: Id) -> Self {
         Self { id, addr: None }
     }
 
+    /// Extended addressing (expects a source address byte when receiving).
     pub fn extended(id: Id, source_address: u8) -> Self {
         Self {
             id,
@@ -117,6 +143,7 @@ impl RxAddress {
         }
     }
 
+    /// Mixed 11-bit addressing (expects an address extension byte when receiving).
     pub fn mixed_11(id: Id, address_extension: u8) -> Self {
         Self {
             id,
@@ -124,6 +151,9 @@ impl RxAddress {
         }
     }
 
+    /// Normal fixed 29-bit addressing.
+    ///
+    /// This constructs a 29-bit CAN ID according to ISO-TP’s fixed addressing scheme.
     pub fn normal_fixed_29(
         source_address: u8,
         target_address: u8,
@@ -137,6 +167,7 @@ impl RxAddress {
         })
     }
 
+    /// Mixed 29-bit addressing (fixed CAN ID + address extension byte).
     pub fn mixed_29(
         source_address: u8,
         target_address: u8,
@@ -153,6 +184,7 @@ impl RxAddress {
 }
 
 impl AsymmetricAddress {
+    /// Construct a new asymmetric address pair.
     pub fn new(tx: TxAddress, rx: RxAddress) -> Self {
         Self { tx, rx }
     }
@@ -170,6 +202,7 @@ impl From<AsymmetricAddress> for IsoTpAddress {
 }
 
 impl IsoTpAddress {
+    /// Normal addressing with explicit Tx/Rx IDs.
     pub fn normal(tx_id: Id, rx_id: Id) -> Self {
         Self {
             tx_id,
@@ -179,6 +212,7 @@ impl IsoTpAddress {
         }
     }
 
+    /// Extended addressing with explicit Tx/Rx IDs and explicit source/target address bytes.
     pub fn extended(tx_id: Id, rx_id: Id, source_address: u8, target_address: u8) -> Self {
         Self {
             tx_id,
@@ -188,6 +222,7 @@ impl IsoTpAddress {
         }
     }
 
+    /// Mixed 11-bit addressing with explicit Tx/Rx IDs and a shared address extension byte.
     pub fn mixed_11(tx_id: Id, rx_id: Id, address_extension: u8) -> Self {
         Self {
             tx_id,
@@ -197,6 +232,7 @@ impl IsoTpAddress {
         }
     }
 
+    /// Normal fixed 29-bit addressing.
     pub fn normal_fixed_29(
         source_address: u8,
         target_address: u8,
@@ -208,6 +244,7 @@ impl IsoTpAddress {
         )))
     }
 
+    /// Mixed 29-bit addressing.
     pub fn mixed_29(
         source_address: u8,
         target_address: u8,

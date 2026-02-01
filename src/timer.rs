@@ -3,6 +3,9 @@
 use core::time::Duration;
 
 /// Abstraction over a monotonic clock.
+///
+/// ISO-TP needs a monotonically increasing time source to implement deadlines (N_As, N_Ar, …) and
+/// pacing (STmin).
 pub trait Clock {
     /// Instant type produced by the clock.
     type Instant: Copy + PartialOrd;

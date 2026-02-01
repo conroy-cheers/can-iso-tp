@@ -1,6 +1,11 @@
 //! Transport-layer error types.
 
 /// Timeout category identifiers (ISO-TP naming).
+///
+/// These names follow the ISO-TP timeout terminology:
+/// - `N_As` / `N_Ar` are sender/receiver timeouts for CAN frame transmission/reception.
+/// - `N_Bs` / `N_Br` relate to flow control and consecutive frame reception.
+/// - `N_Cs` relates to pacing between consecutive frames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimeoutKind {
     /// Timeout while sending a frame.
@@ -41,6 +46,7 @@ pub enum IsoTpError<E> {
 }
 
 impl<E> From<E> for IsoTpError<E> {
+    /// Convert a backend-specific error into [`IsoTpError::LinkError`].
     fn from(err: E) -> Self {
         IsoTpError::LinkError(err)
     }

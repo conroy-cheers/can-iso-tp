@@ -3,6 +3,9 @@
 use core::time::Duration;
 
 /// Progress indicator for non-blocking APIs.
+///
+/// Both the blocking and async APIs in this crate are built on top of polling-style primitives.
+/// `Progress` describes the state after a single poll step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Progress {
     /// Transfer is ongoing.
@@ -16,6 +19,9 @@ pub enum Progress {
 }
 
 /// Bookkeeping for an in-flight segmented transfer.
+///
+/// This struct is public primarily for debugging and integration; most consumers interact through
+/// [`crate::IsoTpNode`] / [`crate::IsoTpAsyncNode`] instead.
 pub struct TxSession {
     /// Expected full payload length.
     pub payload_len: usize,
@@ -50,6 +56,8 @@ impl TxSession {
 }
 
 /// Transmit state machine wrapper.
+///
+/// This is the internal state carried between [`crate::IsoTpNode::poll_send`] calls.
 pub enum TxState<CInstant> {
     /// No active transfer.
     Idle,

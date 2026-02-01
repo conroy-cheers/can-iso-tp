@@ -10,6 +10,10 @@ use crate::pdu::{FlowStatus, Pdu, duration_to_st_min};
 use alloc::vec::Vec;
 
 /// Storage for reassembling an incoming payload.
+///
+/// `iso-tp` supports both:
+/// - caller-provided buffers (common in `no_std`), and
+/// - owned buffers when allocation is available.
 pub enum RxBuffer<'a> {
     /// Caller-provided slice.
     Borrowed(&'a mut [u8]),
@@ -54,8 +58,11 @@ pub enum RxOutcome {
     None,
     /// Emit a flow control frame.
     SendFlowControl {
+        /// Flow status to transmit back to the sender.
         status: FlowStatus,
+        /// Block size for the sender (0 = unlimited).
         block_size: u8,
+        /// Encoded STmin value to send (not a `Duration`).
         st_min: u8,
     },
     /// Payload complete with length.
@@ -64,6 +71,7 @@ pub enum RxOutcome {
 
 /// Receive state machine.
 pub struct RxMachine<'a> {
+    /// Current receive state (idle vs receiving).
     pub state: RxState,
     buffer: RxBuffer<'a>,
     written: usize,
@@ -118,6 +126,10 @@ impl<'a> RxMachine<'a> {
     }
 
     /// Handle an incoming PDU and return actions to take.
+    ///
+    /// The caller is responsible for:
+    /// - feeding PDUs in-order for a given session, and
+    /// - sending flow-control frames when [`RxOutcome::SendFlowControl`] is returned.
     pub fn on_pdu(&mut self, cfg: &IsoTpConfig, pdu: Pdu<'_>) -> Result<RxOutcome, IsoTpError<()>> {
         match pdu {
             Pdu::SingleFrame { len, data } => self.handle_single(cfg, len, data),
@@ -219,6 +231,9 @@ impl<'a> RxMachine<'a> {
     }
 
     /// View the completed message slice.
+    ///
+    /// The returned slice is backed by this machine’s internal buffer and remains valid until the
+    /// next receive operation mutates the machine state.
     pub fn take_completed(&self) -> &[u8] {
         self.take_buffer_slice()
     }

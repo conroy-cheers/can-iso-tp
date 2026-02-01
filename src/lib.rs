@@ -1,5 +1,74 @@
-//! ISO-TP transport built on `embedded-can-interface`.
-//! Exposes blocking and polling helpers with configurable timing and buffering.
+//! `iso-tp`: a lightweight ISO-TP (ISO 15765-2) transport layer for CAN.
+//!
+//! ISO-TP (“ISO Transport Protocol”) defines how to carry *larger* payloads over classic CAN by
+//! segmenting messages into:
+//! - a **Single Frame** (small payloads),
+//! - a **First Frame** + multiple **Consecutive Frames** (larger payloads), and
+//! - **Flow Control** frames to regulate pacing and batching.
+//!
+//! This crate provides:
+//! - A blocking/polling node ([`IsoTpNode`]) built on split CAN Tx/Rx halves from
+//!   `embedded-can-interface`.
+//! - An async node ([`IsoTpAsyncNode`]) for async runtimes via [`AsyncRuntime`].
+//! - Small supporting building blocks (`rx`, `tx`, `pdu`, config and addressing helpers).
+//!
+//! The public API is designed to be usable in `no_std` environments. Allocation is optional (see
+//! feature flags).
+//!
+//! # Feature flags
+//! - `std` (default): enables allocation support and exports [`StdClock`].
+//! - `alloc`: enables allocation support without the Rust standard library.
+//!
+//! # Concepts
+//! - **Addressing**: ISO-TP supports “normal” addressing (just CAN IDs), and extended/mixed modes
+//!   where an additional *addressing byte* is inserted before the PCI. This crate models that via
+//!   [`IsoTpConfig::tx_addr`] / [`IsoTpConfig::rx_addr`] and helpers in [`address`].
+//! - **PCI offset**: when an addressing byte is present, the Protocol Control Information starts at
+//!   byte 1 rather than byte 0. Helpers like [`IsoTpConfig::tx_pci_offset`] and
+//!   [`pdu::decode_with_offset`] keep the encoding/decoding logic consistent.
+//! - **Progress**: the non-blocking API uses [`Progress`] to indicate whether a step completed,
+//!   needs more work, or would block.
+//!
+//! # Quick start
+//! The `IsoTpNode` API is structured as:
+//! - **polling**: repeatedly call [`IsoTpNode::poll_send`] / [`IsoTpNode::poll_recv`], or
+//! - **blocking**: call [`IsoTpNode::send`] / [`IsoTpNode::recv`], which spin internally until done
+//!   or timeout.
+//!
+//! This crate does not ship a concrete CAN driver. For tests and examples, the workspace includes
+//! `embedded-can-mock` which implements `embedded-can-interface`.
+//!
+//! ```rust,ignore
+//! use core::time::Duration;
+//! use iso_tp::{IsoTpConfig, IsoTpNode, Progress, StdClock};
+//! use embedded_can_interface::SplitTxRx;
+//!
+//! # fn example<D, F>(driver: D, cfg: IsoTpConfig) -> Result<(), iso_tp::IsoTpError<D::Error>>
+//! # where
+//! #   D: SplitTxRx,
+//! #   D::Tx: embedded_can_interface::TxFrameIo<Frame = F>,
+//! #   D::Rx: embedded_can_interface::RxFrameIo<Frame = F, Error = <D::Tx as embedded_can_interface::TxFrameIo>::Error>,
+//! #   F: embedded_can::Frame,
+//! # {
+//! let (tx, rx) = driver.split();
+//! let mut node = IsoTpNode::with_clock(tx, rx, cfg, StdClock, None).unwrap();
+//!
+//! // Send (blocking)
+//! node.send(b"hello", Duration::from_millis(100))?;
+//!
+//! // Receive (polling)
+//! let mut out = Vec::new();
+//! loop {
+//!     // In a superloop, you typically pass your current time here.
+//!     let clock = StdClock;
+//!     let now = clock.now();
+//!     match node.poll_recv(now, &mut |data| out = data.to_vec())? {
+//!         Progress::Completed => break,
+//!         Progress::InFlight | Progress::WaitingForFlowControl | Progress::WouldBlock => continue,
+//!     }
+//! }
+//! # Ok(()) }
+//! ```
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -65,6 +134,9 @@ where
     C: Clock,
 {
     /// Construct using a provided clock and optional caller buffer.
+    ///
+    /// The `buffer` is used for receive-side reassembly. If `None` is provided and allocation is
+    /// enabled, an owned buffer is created; otherwise, you must pass a caller-provided slice.
     pub fn with_clock(
         tx: Tx,
         rx: Rx,
@@ -85,6 +157,9 @@ where
     }
 
     /// Advance transmission once; caller supplies current time.
+    ///
+    /// This method is appropriate for “superloop” style designs where you poll the node until it
+    /// reports [`Progress::Completed`]. The node maintains internal state between calls.
     pub fn poll_send(
         &mut self,
         payload: &[u8],
@@ -120,6 +195,9 @@ where
     }
 
     /// Blocking send until completion or timeout.
+    ///
+    /// Internally this repeatedly calls [`IsoTpNode::poll_send`] until completion or a timeout is
+    /// reached.
     pub fn send(&mut self, payload: &[u8], timeout: Duration) -> Result<(), IsoTpError<Tx::Error>> {
         let start = self.clock.now();
         loop {
@@ -137,6 +215,10 @@ where
     }
 
     /// Non-blocking receive step; delivers bytes when complete.
+    ///
+    /// The provided `deliver` callback is invoked only when a full payload has been reassembled.
+    /// The slice passed to `deliver` is valid until the next receive operation mutates the internal
+    /// reassembly buffer.
     pub fn poll_recv(
         &mut self,
         _now: C::Instant,
@@ -201,6 +283,9 @@ where
     }
 
     /// Blocking receive until a full payload arrives or timeout.
+    ///
+    /// Internally this repeatedly calls [`IsoTpNode::poll_recv`] until completion or a timeout is
+    /// reached.
     pub fn recv(
         &mut self,
         timeout: Duration,

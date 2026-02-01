@@ -36,6 +36,9 @@ where
     C: Clock,
 {
     /// Construct using a provided clock and optional caller buffer.
+    ///
+    /// The `buffer` is used for receive-side reassembly. If `None` is provided and allocation is
+    /// enabled, an owned buffer is created; otherwise, you must pass a caller-provided slice.
     pub fn with_clock(
         tx: Tx,
         rx: Rx,
@@ -55,6 +58,9 @@ where
     }
 
     /// Blocking-by-await send until completion or timeout.
+    ///
+    /// This method performs the full ISO-TP handshake and segmentation as needed, using the
+    /// provided runtime for sleeps/timeouts.
     pub async fn send<R: AsyncRuntime>(
         &mut self,
         rt: &R,
@@ -150,6 +156,10 @@ where
     }
 
     /// Blocking-by-await receive until a full payload arrives or timeout.
+    ///
+    /// The provided `deliver` callback is invoked only when a full payload has been reassembled.
+    /// The slice passed to `deliver` is valid until the next receive operation mutates the internal
+    /// reassembly buffer.
     pub async fn recv<R: AsyncRuntime>(
         &mut self,
         rt: &R,
