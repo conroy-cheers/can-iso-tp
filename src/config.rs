@@ -24,8 +24,6 @@ pub struct IsoTpConfig {
     pub padding: Option<u8>,
     /// Maximum application payload length accepted.
     pub max_payload_len: usize,
-    /// Length of the receive buffer.
-    pub rx_buffer_len: usize,
     /// Timeout waiting for transmit availability.
     pub n_as: Duration,
     /// Timeout waiting for receive availability.
@@ -36,6 +34,11 @@ pub struct IsoTpConfig {
     pub n_br: Duration,
     /// Timeout between consecutive frame transmissions.
     pub n_cs: Duration,
+    /// Maximum CAN payload size (DLC) supported by the backend.
+    ///
+    /// - Classic CAN uses 8 bytes.
+    /// - CAN FD can carry up to 64 bytes (if supported by the backend frame type).
+    pub frame_len: usize,
 }
 
 impl Default for IsoTpConfig {
@@ -51,12 +54,12 @@ impl Default for IsoTpConfig {
             wft_max: 0,
             padding: None,
             max_payload_len: 4095,
-            rx_buffer_len: 4095,
             n_as: Duration::from_millis(1000),
             n_ar: Duration::from_millis(1000),
             n_bs: Duration::from_millis(1000),
             n_br: Duration::from_millis(1000),
             n_cs: Duration::from_millis(1000),
+            frame_len: 8,
         }
     }
 }
@@ -68,7 +71,7 @@ impl IsoTpConfig {
         if self.max_payload_len == 0 || self.max_payload_len > 4095 {
             return Err(());
         }
-        if self.rx_buffer_len < self.max_payload_len {
+        if !(8..=64).contains(&self.frame_len) {
             return Err(());
         }
         if self.tx_id == self.rx_id
@@ -91,16 +94,21 @@ impl IsoTpConfig {
 
     /// Max application bytes in a Single Frame under the configured transmit addressing.
     pub fn max_single_frame_payload(&self) -> usize {
-        7usize.saturating_sub(self.tx_pci_offset())
+        let offset = self.tx_pci_offset();
+        if self.frame_len > 8 {
+            self.frame_len.saturating_sub(2 + offset)
+        } else {
+            7usize.saturating_sub(offset)
+        }
     }
 
     /// Max application bytes carried in a First Frame under the configured transmit addressing.
     pub fn max_first_frame_payload(&self) -> usize {
-        6usize.saturating_sub(self.tx_pci_offset())
+        self.frame_len.saturating_sub(2 + self.tx_pci_offset())
     }
 
     /// Max application bytes carried in a Consecutive Frame under the configured transmit addressing.
     pub fn max_consecutive_frame_payload(&self) -> usize {
-        7usize.saturating_sub(self.tx_pci_offset())
+        self.frame_len.saturating_sub(1 + self.tx_pci_offset())
     }
 }

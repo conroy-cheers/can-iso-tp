@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use can_iso_tp::pdu::{Pdu, decode, encode};
-use can_iso_tp::{AsyncRuntime, IsoTpAsyncNode, IsoTpConfig};
+use can_iso_tp::{AsyncRuntime, IsoTpAsyncNode, IsoTpConfig, RxStorage, StdClock};
 use embedded_can::Frame;
 use embedded_can_interface::AsyncTxFrameIo;
 use embedded_can_interface::Id;
@@ -132,11 +132,13 @@ fn cfg_pair(a_to_b: u16, b_to_a: u16) -> (IsoTpConfig, IsoTpConfig) {
         IsoTpConfig {
             tx_id: Id::Standard(embedded_can::StandardId::new(a_to_b).unwrap()),
             rx_id: Id::Standard(embedded_can::StandardId::new(b_to_a).unwrap()),
+            max_payload_len: 256,
             ..IsoTpConfig::default()
         },
         IsoTpConfig {
             tx_id: Id::Standard(embedded_can::StandardId::new(b_to_a).unwrap()),
             rx_id: Id::Standard(embedded_can::StandardId::new(a_to_b).unwrap()),
+            max_payload_len: 256,
             ..IsoTpConfig::default()
         },
     )
@@ -156,8 +158,22 @@ async fn async_single_frame_roundtrip() {
     let (tx_b, rx_b) = bus.add_interface().await;
 
     let (cfg_a, cfg_b) = cfg_pair(0x123, 0x321);
-    let mut node_a = IsoTpAsyncNode::with_std_clock(tx_a, rx_a, cfg_a).unwrap();
-    let mut node_b = IsoTpAsyncNode::with_std_clock(tx_b, rx_b, cfg_b).unwrap();
+    let mut node_a: IsoTpAsyncNode<'static, _, _, _, _> = IsoTpAsyncNode::with_clock_and_storage(
+        tx_a,
+        rx_a,
+        cfg_a,
+        StdClock,
+        RxStorage::Owned(vec![0u8; 256]),
+    )
+    .unwrap();
+    let mut node_b: IsoTpAsyncNode<'static, _, _, _, _> = IsoTpAsyncNode::with_clock_and_storage(
+        tx_b,
+        rx_b,
+        cfg_b,
+        StdClock,
+        RxStorage::Owned(vec![0u8; 256]),
+    )
+    .unwrap();
 
     let rt = TokioRt;
     let payload = b"hello";
@@ -190,8 +206,22 @@ async fn async_multi_frame_roundtrip() {
     let (tx_b, rx_b) = bus.add_interface().await;
 
     let (cfg_a, cfg_b) = cfg_pair(0x700, 0x701);
-    let mut node_a = IsoTpAsyncNode::with_std_clock(tx_a, rx_a, cfg_a).unwrap();
-    let mut node_b = IsoTpAsyncNode::with_std_clock(tx_b, rx_b, cfg_b).unwrap();
+    let mut node_a: IsoTpAsyncNode<'static, _, _, _, _> = IsoTpAsyncNode::with_clock_and_storage(
+        tx_a,
+        rx_a,
+        cfg_a,
+        StdClock,
+        RxStorage::Owned(vec![0u8; 256]),
+    )
+    .unwrap();
+    let mut node_b: IsoTpAsyncNode<'static, _, _, _, _> = IsoTpAsyncNode::with_clock_and_storage(
+        tx_b,
+        rx_b,
+        cfg_b,
+        StdClock,
+        RxStorage::Owned(vec![0u8; 256]),
+    )
+    .unwrap();
 
     let rt = TokioRt;
     let payload: Vec<u8> = (0..100).collect();
@@ -227,8 +257,22 @@ async fn async_block_size_requires_multiple_flow_controls() {
     cfg_b.block_size = 1;
     let fc_id = to_can_id(cfg_b.tx_id);
 
-    let mut node_a = IsoTpAsyncNode::with_std_clock(tx_a, rx_a, cfg_a).unwrap();
-    let mut node_b = IsoTpAsyncNode::with_std_clock(tx_b, rx_b, cfg_b).unwrap();
+    let mut node_a: IsoTpAsyncNode<'static, _, _, _, _> = IsoTpAsyncNode::with_clock_and_storage(
+        tx_a,
+        rx_a,
+        cfg_a,
+        StdClock,
+        RxStorage::Owned(vec![0u8; 256]),
+    )
+    .unwrap();
+    let mut node_b: IsoTpAsyncNode<'static, _, _, _, _> = IsoTpAsyncNode::with_clock_and_storage(
+        tx_b,
+        rx_b,
+        cfg_b,
+        StdClock,
+        RxStorage::Owned(vec![0u8; 256]),
+    )
+    .unwrap();
 
     let rt = TokioRt;
     let payload: Vec<u8> = (0..25).collect();
@@ -277,8 +321,22 @@ async fn async_st_min_enforced_between_consecutive_frames() {
     let st_min = Duration::from_millis(100);
     cfg_b.st_min = st_min;
 
-    let mut node_a = IsoTpAsyncNode::with_std_clock(tx_a, rx_a, cfg_a).unwrap();
-    let mut node_b = IsoTpAsyncNode::with_std_clock(tx_b, rx_b, cfg_b).unwrap();
+    let mut node_a: IsoTpAsyncNode<'static, _, _, _, _> = IsoTpAsyncNode::with_clock_and_storage(
+        tx_a,
+        rx_a,
+        cfg_a,
+        StdClock,
+        RxStorage::Owned(vec![0u8; 256]),
+    )
+    .unwrap();
+    let mut node_b: IsoTpAsyncNode<'static, _, _, _, _> = IsoTpAsyncNode::with_clock_and_storage(
+        tx_b,
+        rx_b,
+        cfg_b,
+        StdClock,
+        RxStorage::Owned(vec![0u8; 256]),
+    )
+    .unwrap();
 
     let rt = TokioRt;
     let payload: Vec<u8> = (0..20).collect();
@@ -339,7 +397,14 @@ async fn async_send_times_out_waiting_for_flow_control_nbs() {
     let (mut cfg_a, _cfg_b) = cfg_pair(0x620, 0x621);
     cfg_a.n_bs = Duration::from_millis(120);
 
-    let mut node_a = IsoTpAsyncNode::with_std_clock(tx_a, rx_a, cfg_a).unwrap();
+    let mut node_a: IsoTpAsyncNode<'static, _, _, _, _> = IsoTpAsyncNode::with_clock_and_storage(
+        tx_a,
+        rx_a,
+        cfg_a,
+        StdClock,
+        RxStorage::Owned(vec![0u8; 256]),
+    )
+    .unwrap();
     let rt = TokioRt;
     let payload: Vec<u8> = (0..24).collect();
 
@@ -361,7 +426,14 @@ async fn async_send_times_out_waiting_for_flow_control_nas() {
     let (mut cfg_a, _cfg_b) = cfg_pair(0x630, 0x631);
     cfg_a.n_bs = Duration::from_millis(800);
 
-    let mut node_a = IsoTpAsyncNode::with_std_clock(tx_a, rx_a, cfg_a).unwrap();
+    let mut node_a: IsoTpAsyncNode<'static, _, _, _, _> = IsoTpAsyncNode::with_clock_and_storage(
+        tx_a,
+        rx_a,
+        cfg_a,
+        StdClock,
+        RxStorage::Owned(vec![0u8; 256]),
+    )
+    .unwrap();
     let rt = TokioRt;
     let payload: Vec<u8> = (0..24).collect();
 
@@ -382,7 +454,14 @@ async fn async_recv_times_out_nar_even_with_noise_and_flow_control_frames() {
     let (mut noise_tx, _noise_rx) = bus.add_interface().await;
 
     let (cfg_a, _cfg_b) = cfg_pair(0x640, 0x641);
-    let mut node_a = IsoTpAsyncNode::with_std_clock(tx_a, rx_a, cfg_a.clone()).unwrap();
+    let mut node_a: IsoTpAsyncNode<'static, _, _, _, _> = IsoTpAsyncNode::with_clock_and_storage(
+        tx_a,
+        rx_a,
+        cfg_a.clone(),
+        StdClock,
+        RxStorage::Owned(vec![0u8; 256]),
+    )
+    .unwrap();
 
     let noise_frame = MockFrame::new(
         embedded_can::Id::Standard(embedded_can::StandardId::new(0x7AA).unwrap()),
@@ -428,9 +507,15 @@ async fn async_recv_rejects_bad_sequence_number() {
     };
     cfg_b.wft_max = 2;
     cfg_b.max_payload_len = 64;
-    cfg_b.rx_buffer_len = 64;
 
-    let mut node_b = IsoTpAsyncNode::with_std_clock(tx_b, rx_b, cfg_b.clone()).unwrap();
+    let mut node_b: IsoTpAsyncNode<'static, _, _, _, _> = IsoTpAsyncNode::with_clock_and_storage(
+        tx_b,
+        rx_b,
+        cfg_b.clone(),
+        StdClock,
+        RxStorage::Owned(vec![0u8; 64]),
+    )
+    .unwrap();
 
     let ff: MockFrame = encode(
         cfg_b.rx_id,

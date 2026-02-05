@@ -8,9 +8,10 @@ use embedded_can_interface::{AsyncRxFrameIo, AsyncTxFrameIo};
 use crate::async_io::AsyncRuntime;
 use crate::errors::{IsoTpError, TimeoutKind};
 use crate::pdu::{
-    FlowStatus, Pdu, decode_with_offset, duration_to_st_min, encode_with_prefix, st_min_to_duration,
+    FlowStatus, Pdu, decode_with_offset, duration_to_st_min, encode_with_prefix_sized,
+    st_min_to_duration,
 };
-use crate::rx::{RxMachine, RxOutcome};
+use crate::rx::{RxMachine, RxOutcome, RxStorage};
 use crate::timer::Clock;
 use crate::{IsoTpConfig, id_matches};
 
@@ -35,26 +36,34 @@ where
     F: Frame,
     C: Clock,
 {
-    /// Construct using a provided clock and optional caller buffer.
-    ///
-    /// The `buffer` is used for receive-side reassembly. If `None` is provided and allocation is
-    /// enabled, an owned buffer is created; otherwise, you must pass a caller-provided slice.
+    /// Start building an [`IsoTpAsyncNode`] (requires RX storage before `build()`).
+    pub fn builder(tx: Tx, rx: Rx, cfg: IsoTpConfig, clock: C) -> IsoTpAsyncNodeBuilder<Tx, Rx, C> {
+        IsoTpAsyncNodeBuilder { tx, rx, cfg, clock }
+    }
+
+    /// Construct using a provided clock and caller-provided RX buffer.
     pub fn with_clock(
         tx: Tx,
         rx: Rx,
         cfg: IsoTpConfig,
         clock: C,
-        buffer: Option<&'a mut [u8]>,
+        rx_buffer: &'a mut [u8],
     ) -> Result<Self, IsoTpError<()>> {
-        cfg.validate().map_err(|_| IsoTpError::InvalidConfig)?;
-        let rx_buffer = crate::build_buffer(cfg.rx_buffer_len, buffer)?;
-        Ok(Self {
-            tx,
-            rx,
-            cfg,
-            clock,
-            rx_machine: RxMachine::new(rx_buffer),
-        })
+        Self::with_clock_and_storage(tx, rx, cfg, clock, RxStorage::Borrowed(rx_buffer))
+    }
+
+    /// Construct using a provided clock and explicit RX storage.
+    pub fn with_clock_and_storage(
+        tx: Tx,
+        rx: Rx,
+        cfg: IsoTpConfig,
+        clock: C,
+        rx_storage: RxStorage<'a>,
+    ) -> Result<Self, IsoTpError<()>> {
+        let node = Self::builder(tx, rx, cfg, clock)
+            .rx_storage(rx_storage)
+            .build()?;
+        Ok(node)
     }
 
     /// Blocking-by-await send until completion or timeout.
@@ -81,9 +90,14 @@ where
                 len: payload.len() as u8,
                 data: payload,
             };
-            let frame =
-                encode_with_prefix(self.cfg.tx_id, &pdu, self.cfg.padding, self.cfg.tx_addr)
-                    .map_err(|_| IsoTpError::InvalidFrame)?;
+            let frame = encode_with_prefix_sized(
+                self.cfg.tx_id,
+                &pdu,
+                self.cfg.padding,
+                self.cfg.tx_addr,
+                self.cfg.frame_len,
+            )
+                .map_err(|_| IsoTpError::InvalidFrame)?;
             self.send_frame(rt, start, timeout, TimeoutKind::NAs, &frame)
                 .await?;
             return Ok(());
@@ -97,7 +111,13 @@ where
             len: payload.len() as u16,
             data: &payload[..offset],
         };
-        let frame = encode_with_prefix(self.cfg.tx_id, &pdu, self.cfg.padding, self.cfg.tx_addr)
+        let frame = encode_with_prefix_sized(
+            self.cfg.tx_id,
+            &pdu,
+            self.cfg.padding,
+            self.cfg.tx_addr,
+            self.cfg.frame_len,
+        )
             .map_err(|_| IsoTpError::InvalidFrame)?;
         self.send_frame(rt, start, timeout, TimeoutKind::NAs, &frame)
             .await?;
@@ -137,9 +157,14 @@ where
                 sn: next_sn & 0x0F,
                 data: &payload[offset..offset + chunk],
             };
-            let frame =
-                encode_with_prefix(self.cfg.tx_id, &pdu, self.cfg.padding, self.cfg.tx_addr)
-                    .map_err(|_| IsoTpError::InvalidFrame)?;
+            let frame = encode_with_prefix_sized(
+                self.cfg.tx_id,
+                &pdu,
+                self.cfg.padding,
+                self.cfg.tx_addr,
+                self.cfg.frame_len,
+            )
+                .map_err(|_| IsoTpError::InvalidFrame)?;
             self.send_frame(rt, start, timeout, TimeoutKind::NAs, &frame)
                 .await?;
 
@@ -308,7 +333,13 @@ where
             block_size,
             st_min,
         };
-        let frame = encode_with_prefix(self.cfg.tx_id, &fc, self.cfg.padding, self.cfg.tx_addr)
+        let frame = encode_with_prefix_sized(
+            self.cfg.tx_id,
+            &fc,
+            self.cfg.padding,
+            self.cfg.tx_addr,
+            self.cfg.frame_len,
+        )
             .map_err(|_| IsoTpError::InvalidFrame)?;
         self.send_frame(rt, start, timeout, TimeoutKind::NAs, &frame)
             .await?;
@@ -394,9 +425,77 @@ where
     Rx: AsyncRxFrameIo<Frame = F, Error = Tx::Error>,
     F: Frame,
 {
-    /// Convenience constructor using `StdClock` and an owned buffer.
-    pub fn with_std_clock(tx: Tx, rx: Rx, cfg: IsoTpConfig) -> Result<Self, IsoTpError<()>> {
-        IsoTpAsyncNode::with_clock(tx, rx, cfg, crate::StdClock, None)
+    /// Convenience constructor using `StdClock`.
+    pub fn with_std_clock(
+        tx: Tx,
+        rx: Rx,
+        cfg: IsoTpConfig,
+        rx_buffer: &'a mut [u8],
+    ) -> Result<Self, IsoTpError<()>> {
+        IsoTpAsyncNode::with_clock(tx, rx, cfg, crate::StdClock, rx_buffer)
+    }
+}
+
+/// Builder for [`IsoTpAsyncNode`] that enforces providing RX storage before construction.
+pub struct IsoTpAsyncNodeBuilder<Tx, Rx, C> {
+    tx: Tx,
+    rx: Rx,
+    cfg: IsoTpConfig,
+    clock: C,
+}
+
+/// Builder state after RX storage has been provided.
+pub struct IsoTpAsyncNodeBuilderWithRx<'a, Tx, Rx, C> {
+    tx: Tx,
+    rx: Rx,
+    cfg: IsoTpConfig,
+    clock: C,
+    rx_storage: RxStorage<'a>,
+}
+
+impl<Tx, Rx, C> IsoTpAsyncNodeBuilder<Tx, Rx, C> {
+    /// Provide the RX buffer used for receive-side reassembly.
+    pub fn rx_buffer<'a>(self, buffer: &'a mut [u8]) -> IsoTpAsyncNodeBuilderWithRx<'a, Tx, Rx, C> {
+        self.rx_storage(RxStorage::Borrowed(buffer))
+    }
+
+    /// Provide explicit RX storage (borrowed or owned, depending on features).
+    pub fn rx_storage<'a>(
+        self,
+        rx_storage: RxStorage<'a>,
+    ) -> IsoTpAsyncNodeBuilderWithRx<'a, Tx, Rx, C> {
+        IsoTpAsyncNodeBuilderWithRx {
+            tx: self.tx,
+            rx: self.rx,
+            cfg: self.cfg,
+            clock: self.clock,
+            rx_storage,
+        }
+    }
+}
+
+impl<'a, Tx, Rx, C> IsoTpAsyncNodeBuilderWithRx<'a, Tx, Rx, C>
+where
+    Tx: AsyncTxFrameIo,
+    Rx: AsyncRxFrameIo<Frame = <Tx as AsyncTxFrameIo>::Frame, Error = <Tx as AsyncTxFrameIo>::Error>,
+    <Tx as AsyncTxFrameIo>::Frame: Frame,
+    C: Clock,
+{
+    /// Validate configuration and build an [`IsoTpAsyncNode`].
+    pub fn build(
+        self,
+    ) -> Result<IsoTpAsyncNode<'a, Tx, Rx, <Tx as AsyncTxFrameIo>::Frame, C>, IsoTpError<()>> {
+        self.cfg.validate().map_err(|_| IsoTpError::InvalidConfig)?;
+        if self.rx_storage.capacity() < self.cfg.max_payload_len {
+            return Err(IsoTpError::InvalidConfig);
+        }
+        Ok(IsoTpAsyncNode {
+            tx: self.tx,
+            rx: self.rx,
+            cfg: self.cfg,
+            clock: self.clock,
+            rx_machine: RxMachine::new(self.rx_storage),
+        })
     }
 }
 

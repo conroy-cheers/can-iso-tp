@@ -68,7 +68,23 @@ pub fn encode_with_prefix<F: Frame>(
     padding: Option<u8>,
     prefix: Option<u8>,
 ) -> Result<F, IsoTpError<()>> {
-    let mut buf = [0u8; 8];
+    encode_with_prefix_sized(id, pdu, padding, prefix, 8)
+}
+
+/// Like [`encode_with_prefix`], but allows a larger CAN payload length (e.g. CAN FD).
+///
+/// `frame_len` is the desired CAN payload size. Most classic CAN drivers only support 8.
+pub fn encode_with_prefix_sized<F: Frame>(
+    id: Id,
+    pdu: &Pdu<'_>,
+    padding: Option<u8>,
+    prefix: Option<u8>,
+    frame_len: usize,
+) -> Result<F, IsoTpError<()>> {
+    if !(8..=64).contains(&frame_len) {
+        return Err(IsoTpError::InvalidFrame);
+    }
+    let mut buf = [0u8; 64];
     let offset = pci_offset_from_prefix(prefix);
     if offset > 0 {
         buf[0] = prefix.unwrap();
@@ -76,30 +92,50 @@ pub fn encode_with_prefix<F: Frame>(
 
     let used = match pdu {
         Pdu::SingleFrame { len, data } => {
-            if *len as usize > 7
-                || *len as usize > data.len()
-                || *len as usize > 7usize.saturating_sub(offset)
-            {
+            let payload_len = *len as usize;
+            if payload_len > data.len() {
                 return Err(IsoTpError::InvalidFrame);
             }
-            buf[offset] = *len & 0x0F;
-            let used = offset + 1 + *len as usize;
-            buf[offset + 1..used].copy_from_slice(&data[..*len as usize]);
-            used
+
+            let classic_max = 7usize.saturating_sub(offset);
+            if payload_len <= classic_max {
+                buf[offset] = *len & 0x0F;
+                let used = offset + 1 + payload_len;
+                buf[offset + 1..used].copy_from_slice(&data[..payload_len]);
+                used
+            } else {
+                // CAN FD extended Single Frame length encoding.
+                // SF_DL nibble = 0, next byte is 8-bit length.
+                if frame_len <= 8 || payload_len > u8::MAX as usize {
+                    return Err(IsoTpError::InvalidFrame);
+                }
+                let needed = offset + 2 + payload_len;
+                if needed > frame_len {
+                    return Err(IsoTpError::InvalidFrame);
+                }
+                buf[offset] = 0x00;
+                buf[offset + 1] = payload_len as u8;
+                buf[offset + 2..needed].copy_from_slice(&data[..payload_len]);
+                needed
+            }
         }
         Pdu::FirstFrame { len, data } => {
-            let min_len = 8u16.saturating_sub(offset as u16);
-            if *len < min_len || *len > 4095 || data.is_empty() {
+            let max_sf = if frame_len > 8 {
+                frame_len.saturating_sub(2 + offset)
+            } else {
+                7usize.saturating_sub(offset)
+            };
+            if (*len as usize) <= max_sf || *len > 4095 || data.is_empty() {
                 return Err(IsoTpError::InvalidFrame);
             }
             buf[offset] = 0x10 | ((*len >> 8) as u8 & 0x0F);
             buf[offset + 1] = (*len & 0xFF) as u8;
-            let data_len = data.len().min(6usize.saturating_sub(offset));
+            let data_len = data.len().min(frame_len.saturating_sub(2 + offset));
             buf[offset + 2..offset + 2 + data_len].copy_from_slice(&data[..data_len]);
             offset + 2 + data_len
         }
         Pdu::ConsecutiveFrame { sn, data } => {
-            if data.len() > 7usize.saturating_sub(offset) {
+            if data.len() > frame_len.saturating_sub(1 + offset) {
                 return Err(IsoTpError::InvalidFrame);
             }
             buf[offset] = 0x20 | (*sn & 0x0F);
@@ -117,7 +153,7 @@ pub fn encode_with_prefix<F: Frame>(
                 FlowStatus::Wait => 0x1,
                 FlowStatus::Overflow => 0x2,
             };
-            if offset + 3 > 8 {
+            if offset + 3 > frame_len {
                 return Err(IsoTpError::InvalidFrame);
             }
             buf[offset] = 0x30 | status_nibble;
@@ -128,10 +164,10 @@ pub fn encode_with_prefix<F: Frame>(
     };
 
     let used = if let Some(pad) = padding {
-        for b in buf[used..].iter_mut() {
+        for b in buf[used..frame_len].iter_mut() {
             *b = pad;
         }
-        8
+        frame_len
     } else {
         used
     };
@@ -163,33 +199,51 @@ pub fn decode_with_offset<'a>(
     match pci {
         0x0 => {
             let len = data[pci_offset] & 0x0F;
-            if len as usize > 7 {
-                return Err(IsoTpError::InvalidFrame);
+            if len == 0 && data.len() > 8 {
+                // CAN FD extended Single Frame length encoding.
+                if data.len() < pci_offset + 2 {
+                    return Err(IsoTpError::InvalidFrame);
+                }
+                let payload_len = data[pci_offset + 1] as usize;
+                let payload_start = pci_offset + 2;
+                if data.len() < payload_start + payload_len {
+                    return Err(IsoTpError::InvalidFrame);
+                }
+                Ok(Pdu::SingleFrame {
+                    len: payload_len as u8,
+                    data: &data[payload_start..payload_start + payload_len],
+                })
+            } else {
+                if len as usize > 7 {
+                    return Err(IsoTpError::InvalidFrame);
+                }
+                let payload_len = len as usize;
+                let payload_start = pci_offset + 1;
+                if data.len() < payload_start + payload_len {
+                    return Err(IsoTpError::InvalidFrame);
+                }
+                Ok(Pdu::SingleFrame {
+                    len,
+                    data: &data[payload_start..payload_start + payload_len],
+                })
             }
-            let payload_len = len as usize;
-            let payload_start = pci_offset + 1;
-            if data.len() < payload_start + payload_len {
-                return Err(IsoTpError::InvalidFrame);
-            }
-            Ok(Pdu::SingleFrame {
-                len,
-                data: &data[payload_start..payload_start + payload_len],
-            })
         }
         0x1 => {
             if data.len() < pci_offset + 2 {
                 return Err(IsoTpError::InvalidFrame);
             }
             let len = (((data[pci_offset] & 0x0F) as u16) << 8) | data[pci_offset + 1] as u16;
-            let min_len = 8u16.saturating_sub(pci_offset as u16);
-            if len < min_len || len > 4095 {
+            let max_sf = if data.len() > 8 {
+                data.len().saturating_sub(2 + pci_offset)
+            } else {
+                7usize.saturating_sub(pci_offset)
+            };
+            if (len as usize) <= max_sf || len > 4095 {
                 return Err(IsoTpError::InvalidFrame);
             }
-            let available = data.len().saturating_sub(pci_offset + 2);
-            let take = available.min(6usize.saturating_sub(pci_offset));
             Ok(Pdu::FirstFrame {
                 len,
-                data: &data[pci_offset + 2..pci_offset + 2 + take],
+                data: &data[pci_offset + 2..],
             })
         }
         0x2 => {

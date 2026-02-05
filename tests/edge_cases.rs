@@ -1,11 +1,11 @@
 use can_iso_tp::pdu::{Pdu, encode};
-use can_iso_tp::{IsoTpConfig, IsoTpNode, Progress, TimeoutKind};
+use can_iso_tp::{IsoTpConfig, IsoTpNode, Progress, RxStorage, StdClock, TimeoutKind};
 use embedded_can::{Frame, StandardId};
 use embedded_can_interface::{Id, SplitTxRx};
 use embedded_can_mock::{BusHandle, MockCan, MockFrame};
 use std::time::{Duration, Instant};
 
-fn cfg(tx: u16, rx: u16, block_size: u8, rx_buf: usize, max_len: usize) -> IsoTpConfig {
+fn cfg(tx: u16, rx: u16, block_size: u8, max_len: usize) -> IsoTpConfig {
     IsoTpConfig {
         tx_id: Id::Standard(StandardId::new(tx).unwrap()),
         rx_id: Id::Standard(StandardId::new(rx).unwrap()),
@@ -16,12 +16,12 @@ fn cfg(tx: u16, rx: u16, block_size: u8, rx_buf: usize, max_len: usize) -> IsoTp
         wft_max: 2,
         padding: None,
         max_payload_len: max_len,
-        rx_buffer_len: rx_buf,
         n_as: Duration::from_millis(200),
         n_ar: Duration::from_millis(200),
         n_bs: Duration::from_millis(200),
         n_br: Duration::from_millis(200),
         n_cs: Duration::from_millis(200),
+        frame_len: 8,
     }
 }
 
@@ -35,11 +35,12 @@ fn make_frame(id: u16, data: &[u8]) -> MockFrame {
 
 #[test]
 fn config_validation_rejects_mirrored_ids_and_bad_lengths() {
-    let mut cfg = cfg(0x100, 0x100, 0, 32, 32);
+    let mut cfg = cfg(0x100, 0x100, 0, 32);
     assert!(cfg.validate().is_err());
     cfg.tx_id = Id::Standard(StandardId::new(0x101).unwrap());
-    cfg.rx_buffer_len = 8;
-    cfg.max_payload_len = 16;
+    cfg.max_payload_len = 0;
+    assert!(cfg.validate().is_err());
+    cfg.max_payload_len = 4096;
     assert!(cfg.validate().is_err());
 }
 
@@ -50,8 +51,22 @@ fn zero_length_payload_roundtrip() {
     let b = MockCan::new_with_bus(&bus, vec![]).unwrap();
     let (tx_a, rx_a) = a.split();
     let (tx_b, rx_b) = b.split();
-    let mut sender = IsoTpNode::with_std_clock(tx_a, rx_a, cfg(0x200, 0x201, 0, 32, 32)).unwrap();
-    let mut receiver = IsoTpNode::with_std_clock(tx_b, rx_b, cfg(0x201, 0x200, 0, 32, 32)).unwrap();
+    let mut sender = IsoTpNode::with_clock_and_storage(
+        tx_a,
+        rx_a,
+        cfg(0x200, 0x201, 0, 32),
+        StdClock,
+        RxStorage::Owned(vec![0u8; 32]),
+    )
+    .unwrap();
+    let mut receiver = IsoTpNode::with_clock_and_storage(
+        tx_b,
+        rx_b,
+        cfg(0x201, 0x200, 0, 32),
+        StdClock,
+        RxStorage::Owned(vec![0u8; 32]),
+    )
+    .unwrap();
 
     sender
         .send(&[], Duration::from_millis(100))
@@ -72,8 +87,22 @@ fn oversized_payload_triggers_overflow_on_both_sides() {
     let b = MockCan::new_with_bus(&bus, vec![]).unwrap();
     let (tx_a, rx_a) = a.split();
     let (tx_b, rx_b) = b.split();
-    let mut sender = IsoTpNode::with_std_clock(tx_a, rx_a, cfg(0x300, 0x301, 0, 32, 32)).unwrap();
-    let mut receiver = IsoTpNode::with_std_clock(tx_b, rx_b, cfg(0x301, 0x300, 0, 8, 8)).unwrap();
+    let mut sender = IsoTpNode::with_clock_and_storage(
+        tx_a,
+        rx_a,
+        cfg(0x300, 0x301, 0, 32),
+        StdClock,
+        RxStorage::Owned(vec![0u8; 32]),
+    )
+    .unwrap();
+    let mut receiver = IsoTpNode::with_clock_and_storage(
+        tx_b,
+        rx_b,
+        cfg(0x301, 0x300, 0, 8),
+        StdClock,
+        RxStorage::Owned(vec![0u8; 8]),
+    )
+    .unwrap();
 
     let payload: Vec<u8> = (0..20u8).collect();
     let now = Instant::now();
@@ -97,7 +126,14 @@ fn flow_control_wait_exceeds_wft_max() {
     let can = MockCan::new_with_bus(&bus, vec![]).unwrap();
     let injector = bus.add_interface(vec![]).unwrap();
     let (tx, rx) = can.split();
-    let mut sender = IsoTpNode::with_std_clock(tx, rx, cfg(0x400, 0x401, 0, 64, 64)).unwrap();
+    let mut sender = IsoTpNode::with_clock_and_storage(
+        tx,
+        rx,
+        cfg(0x400, 0x401, 0, 64),
+        StdClock,
+        RxStorage::Owned(vec![0u8; 64]),
+    )
+    .unwrap();
 
     let payload: Vec<u8> = (0..24u8).collect();
     let now = Instant::now();
@@ -128,7 +164,14 @@ fn st_min_pacing_blocks_until_deadline() {
     let can = MockCan::new_with_bus(&bus, vec![]).unwrap();
     let injector = bus.add_interface(vec![]).unwrap();
     let (tx, rx) = can.split();
-    let mut sender = IsoTpNode::with_std_clock(tx, rx, cfg(0x500, 0x501, 0, 64, 64)).unwrap();
+    let mut sender = IsoTpNode::with_clock_and_storage(
+        tx,
+        rx,
+        cfg(0x500, 0x501, 0, 64),
+        StdClock,
+        RxStorage::Owned(vec![0u8; 64]),
+    )
+    .unwrap();
     let payload: Vec<u8> = (0..16u8).collect();
     let t0 = Instant::now();
     assert_eq!(
@@ -158,7 +201,14 @@ fn bad_sequence_number_is_rejected() {
     let can_rx = MockCan::new_with_bus(&bus, vec![]).unwrap();
     let injector = bus.add_interface(vec![]).unwrap();
     let (tx_b, rx_b) = can_rx.split();
-    let mut receiver = IsoTpNode::with_std_clock(tx_b, rx_b, cfg(0x601, 0x600, 0, 64, 64)).unwrap();
+    let mut receiver = IsoTpNode::with_clock_and_storage(
+        tx_b,
+        rx_b,
+        cfg(0x601, 0x600, 0, 64),
+        StdClock,
+        RxStorage::Owned(vec![0u8; 64]),
+    )
+    .unwrap();
 
     // First frame claims total len 10 with six bytes in payload.
     let ff: MockFrame = encode(

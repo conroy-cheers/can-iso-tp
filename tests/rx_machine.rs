@@ -1,20 +1,19 @@
 use can_iso_tp::pdu::Pdu;
-use can_iso_tp::rx::{RxBuffer, RxMachine, RxOutcome, RxState};
+use can_iso_tp::rx::{RxMachine, RxOutcome, RxState, RxStorage};
 use can_iso_tp::{IsoTpConfig, IsoTpError};
 
-fn cfg_with_limits(max_payload_len: usize, rx_buffer_len: usize) -> IsoTpConfig {
+fn cfg_with_limits(max_payload_len: usize) -> IsoTpConfig {
     IsoTpConfig {
         max_payload_len,
-        rx_buffer_len,
         ..IsoTpConfig::default()
     }
 }
 
 #[test]
 fn rx_machine_borrowed_buffer_happy_path_and_helpers() {
-    let cfg = cfg_with_limits(64, 8);
+    let cfg = cfg_with_limits(64);
     let mut buf = [0u8; 8];
-    let mut rx = RxMachine::new(RxBuffer::Borrowed(&mut buf));
+    let mut rx = RxMachine::new(RxStorage::Borrowed(&mut buf));
 
     let out = rx
         .on_pdu(
@@ -38,9 +37,9 @@ fn rx_machine_borrowed_buffer_happy_path_and_helpers() {
 
 #[test]
 fn rx_machine_reports_errors_for_unexpected_or_overflow_pdus() {
-    let cfg = cfg_with_limits(4, 2);
+    let cfg = cfg_with_limits(4);
     let mut buf = [0u8; 2];
-    let mut rx = RxMachine::new(RxBuffer::Borrowed(&mut buf));
+    let mut rx = RxMachine::new(RxStorage::Borrowed(&mut buf));
 
     // SingleFrame while not idle.
     rx.state = RxState::Receiving;
@@ -120,8 +119,8 @@ fn rx_machine_reports_errors_for_unexpected_or_overflow_pdus() {
 
 #[test]
 fn rx_buffer_owned_as_ref_and_as_mut_paths_are_exercised() {
-    let cfg = cfg_with_limits(64, 8);
-    let mut rx = RxMachine::new(RxBuffer::Owned(vec![0u8; 8]));
+    let cfg = cfg_with_limits(64);
+    let mut rx = RxMachine::new(RxStorage::Owned(vec![0u8; 8]));
     let out = rx
         .on_pdu(
             &cfg,

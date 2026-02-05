@@ -114,7 +114,6 @@ fn cfg_with_addr(max_payload_len: usize, addr: u8) -> IsoTpConfig {
         rx_id: Id::Standard(StandardId::new(0x701).unwrap()),
         rx_addr: Some(addr),
         max_payload_len,
-        rx_buffer_len: max_payload_len,
         ..IsoTpConfig::default()
     }
 }
@@ -122,6 +121,7 @@ fn cfg_with_addr(max_payload_len: usize, addr: u8) -> IsoTpConfig {
 #[tokio::test(flavor = "current_thread")]
 async fn async_recv_skips_wrong_addr_then_ignores_unexpected_pdu_then_delivers() {
     let cfg = cfg_with_addr(64, 0xAA);
+    let mut rx_buf = [0u8; 64];
 
     let wrong_addr = encode_with_prefix::<MockFrame>(
         cfg.rx_id,
@@ -157,7 +157,7 @@ async fn async_recv_skips_wrong_addr_then_ignores_unexpected_pdu_then_delivers()
 
     let tx = RecordingTx::default();
     let rx = ScriptedRx::new([Ok(wrong_addr), Ok(unexpected_cf), Ok(good)]);
-    let mut node = IsoTpAsyncNode::with_clock(tx, rx, cfg, TestClock, None).unwrap();
+    let mut node = IsoTpAsyncNode::with_clock(tx, rx, cfg, TestClock, &mut rx_buf).unwrap();
 
     let rt = PassthroughRt;
     let mut delivered = Vec::new();
@@ -172,6 +172,7 @@ async fn async_recv_skips_wrong_addr_then_ignores_unexpected_pdu_then_delivers()
 #[tokio::test(flavor = "current_thread")]
 async fn async_recv_overflow_sends_overflow_flow_control() {
     let cfg = cfg_with_addr(8, 0xCC);
+    let mut rx_buf = [0u8; 64];
     let tx_pci_offset = cfg.tx_pci_offset();
     let first = encode_with_prefix::<MockFrame>(
         cfg.rx_id,
@@ -187,7 +188,7 @@ async fn async_recv_overflow_sends_overflow_flow_control() {
     let tx = RecordingTx::default();
     let sent = tx.sent.clone();
     let rx = ScriptedRx::new([Ok(first)]);
-    let mut node = IsoTpAsyncNode::with_clock(tx, rx, cfg, TestClock, None).unwrap();
+    let mut node = IsoTpAsyncNode::with_clock(tx, rx, cfg, TestClock, &mut rx_buf).unwrap();
 
     let rt = PassthroughRt;
     let err = node
@@ -211,9 +212,10 @@ async fn async_recv_overflow_sends_overflow_flow_control() {
 #[tokio::test(flavor = "current_thread")]
 async fn async_recv_maps_link_error() {
     let cfg = cfg_with_addr(8, 0x01);
+    let mut rx_buf = [0u8; 64];
     let tx = RecordingTx::default();
     let rx = ScriptedRx::new([Err(())]);
-    let mut node = IsoTpAsyncNode::with_clock(tx, rx, cfg, TestClock, None).unwrap();
+    let mut node = IsoTpAsyncNode::with_clock(tx, rx, cfg, TestClock, &mut rx_buf).unwrap();
 
     let rt = PassthroughRt;
     let err = node
@@ -273,9 +275,10 @@ async fn async_send_maps_link_error_and_timeout() {
     )
     .unwrap();
 
+    let mut rx_buf = [0u8; 64];
     let tx = RecordingTx::default();
     let rx = ScriptedRx::new([Ok(wrong_addr_fc), Ok(non_fc_noise), Ok(wait_fc), Ok(cts_fc)]);
-    let mut node = IsoTpAsyncNode::with_clock(tx, rx, cfg, TestClock, None).unwrap();
+    let mut node = IsoTpAsyncNode::with_clock(tx, rx, cfg, TestClock, &mut rx_buf).unwrap();
 
     let rt = PassthroughRt;
     node.send(&rt, &[0u8; 8], Duration::from_millis(10))
@@ -350,12 +353,13 @@ async fn async_send_maps_link_error_and_timeout() {
     }
 
     let cfg = cfg_with_addr(8, 0x01);
+    let mut rx_buf = [0u8; 8];
     let rt = PassthroughRt;
     let timeout_rt = AlwaysTimeoutRt;
 
     let tx = FailingTx;
     let rx = NoRx;
-    let mut node = IsoTpAsyncNode::with_clock(tx, rx, cfg, TestClock, None).unwrap();
+    let mut node = IsoTpAsyncNode::with_clock(tx, rx, cfg, TestClock, &mut rx_buf).unwrap();
 
     let err = node
         .send(&rt, &[0x55], Duration::from_millis(10))

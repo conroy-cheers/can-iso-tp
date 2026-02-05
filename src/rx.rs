@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 /// `can-iso-tp` supports both:
 /// - caller-provided buffers (common in `no_std`), and
 /// - owned buffers when allocation is available.
-pub enum RxBuffer<'a> {
+pub enum RxStorage<'a> {
     /// Caller-provided slice.
     Borrowed(&'a mut [u8]),
     #[cfg(any(feature = "alloc", feature = "std"))]
@@ -22,13 +22,13 @@ pub enum RxBuffer<'a> {
     Owned(Vec<u8>),
 }
 
-impl<'a> RxBuffer<'a> {
+impl<'a> RxStorage<'a> {
     /// Total writable capacity.
     pub fn capacity(&self) -> usize {
         match self {
-            RxBuffer::Borrowed(buf) => buf.len(),
+            RxStorage::Borrowed(buf) => buf.len(),
             #[cfg(any(feature = "alloc", feature = "std"))]
-            RxBuffer::Owned(buf) => buf.len(),
+            RxStorage::Owned(buf) => buf.len(),
         }
     }
 
@@ -36,9 +36,9 @@ impl<'a> RxBuffer<'a> {
     #[allow(clippy::should_implement_trait)]
     pub fn as_mut(&mut self) -> &mut [u8] {
         match self {
-            RxBuffer::Borrowed(buf) => buf,
+            RxStorage::Borrowed(buf) => buf,
             #[cfg(any(feature = "alloc", feature = "std"))]
-            RxBuffer::Owned(buf) => buf.as_mut_slice(),
+            RxStorage::Owned(buf) => buf.as_mut_slice(),
         }
     }
 }
@@ -73,7 +73,7 @@ pub enum RxOutcome {
 pub struct RxMachine<'a> {
     /// Current receive state (idle vs receiving).
     pub state: RxState,
-    buffer: RxBuffer<'a>,
+    buffer: RxStorage<'a>,
     written: usize,
     expected_len: usize,
     next_sn: u8,
@@ -83,7 +83,7 @@ pub struct RxMachine<'a> {
 
 impl<'a> RxMachine<'a> {
     /// Create a new machine with the provided buffer.
-    pub fn new(buffer: RxBuffer<'a>) -> Self {
+    pub fn new(buffer: RxStorage<'a>) -> Self {
         Self {
             state: RxState::Idle,
             buffer,
@@ -119,9 +119,9 @@ impl<'a> RxMachine<'a> {
 
     fn take_buffer_slice(&self) -> &[u8] {
         match &self.buffer {
-            RxBuffer::Borrowed(buf) => &buf[..self.written],
+            RxStorage::Borrowed(buf) => &buf[..self.written],
             #[cfg(any(feature = "alloc", feature = "std"))]
-            RxBuffer::Owned(buf) => &buf[..self.written],
+            RxStorage::Owned(buf) => &buf[..self.written],
         }
     }
 
@@ -170,7 +170,7 @@ impl<'a> RxMachine<'a> {
         if len > cfg.max_payload_len || len > self.buffer.capacity() {
             return Err(IsoTpError::Overflow);
         }
-        let copy_len = min(data.len(), min(len, 6));
+        let copy_len = min(data.len(), len);
         self.buffer.as_mut()[..copy_len].copy_from_slice(&data[..copy_len]);
         self.written = copy_len;
         self.expected_len = len;
@@ -239,22 +239,22 @@ impl<'a> RxMachine<'a> {
     }
 }
 
-impl<'a> AsRef<[u8]> for RxBuffer<'a> {
+impl<'a> AsRef<[u8]> for RxStorage<'a> {
     fn as_ref(&self) -> &[u8] {
         match self {
-            RxBuffer::Borrowed(buf) => buf,
+            RxStorage::Borrowed(buf) => buf,
             #[cfg(any(feature = "alloc", feature = "std"))]
-            RxBuffer::Owned(buf) => buf.as_slice(),
+            RxStorage::Owned(buf) => buf.as_slice(),
         }
     }
 }
 
-impl<'a> AsMut<[u8]> for RxBuffer<'a> {
+impl<'a> AsMut<[u8]> for RxStorage<'a> {
     fn as_mut(&mut self) -> &mut [u8] {
         match self {
-            RxBuffer::Borrowed(buf) => buf,
+            RxStorage::Borrowed(buf) => buf,
             #[cfg(any(feature = "alloc", feature = "std"))]
-            RxBuffer::Owned(buf) => buf.as_mut_slice(),
+            RxStorage::Owned(buf) => buf.as_mut_slice(),
         }
     }
 }
