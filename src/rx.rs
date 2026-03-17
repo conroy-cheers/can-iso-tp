@@ -2,6 +2,7 @@
 
 use core::cmp::min;
 
+use crate::RxFlowControl;
 use crate::config::IsoTpConfig;
 use crate::errors::IsoTpError;
 use crate::pdu::{FlowStatus, Pdu, duration_to_st_min};
@@ -97,10 +98,12 @@ impl<'a> RxMachine<'a> {
 
     /// Clear state to idle.
     pub fn reset(&mut self) {
+        isotp_trace!("rx reset");
         self.state = RxState::Idle;
         self.written = 0;
         self.expected_len = 0;
         self.next_sn = 0;
+        self.block_size = 0;
         self.block_remaining = 0;
     }
 
@@ -125,16 +128,32 @@ impl<'a> RxMachine<'a> {
         }
     }
 
+    /// Length of the currently completed payload.
+    pub fn completed_len(&self) -> usize {
+        self.written
+    }
+
+    /// Replace internal storage and return the previous storage.
+    pub fn replace_storage(&mut self, mut replacement: RxStorage<'a>) -> RxStorage<'a> {
+        core::mem::swap(&mut self.buffer, &mut replacement);
+        replacement
+    }
+
     /// Handle an incoming PDU and return actions to take.
     ///
     /// The caller is responsible for:
     /// - feeding PDUs in-order for a given session, and
     /// - sending flow-control frames when [`RxOutcome::SendFlowControl`] is returned.
-    pub fn on_pdu(&mut self, cfg: &IsoTpConfig, pdu: Pdu<'_>) -> Result<RxOutcome, IsoTpError<()>> {
+    pub fn on_pdu(
+        &mut self,
+        cfg: &IsoTpConfig,
+        rx_fc: &RxFlowControl,
+        pdu: Pdu<'_>,
+    ) -> Result<RxOutcome, IsoTpError<()>> {
         match pdu {
             Pdu::SingleFrame { len, data } => self.handle_single(cfg, len, data),
-            Pdu::FirstFrame { len, data } => self.handle_first(cfg, len, data),
-            Pdu::ConsecutiveFrame { sn, data } => self.handle_consecutive(cfg, sn, data),
+            Pdu::FirstFrame { len, data } => self.handle_first(cfg, rx_fc, len, data),
+            Pdu::ConsecutiveFrame { sn, data } => self.handle_consecutive(cfg, rx_fc, sn, data),
             Pdu::FlowControl { .. } => Err(IsoTpError::UnexpectedPdu),
         }
     }
@@ -146,28 +165,57 @@ impl<'a> RxMachine<'a> {
         data: &[u8],
     ) -> Result<RxOutcome, IsoTpError<()>> {
         if self.state != RxState::Idle {
+            isotp_warn!(
+                "rx single unexpected receiving={}",
+                self.state == RxState::Receiving
+            );
             return Err(IsoTpError::UnexpectedPdu);
         }
         let len = len as usize;
         if len > cfg.max_payload_len || len > data.len() || len > self.buffer.capacity() {
+            isotp_warn!(
+                "rx single overflow len={} data_len={} cap={} max={}",
+                len,
+                data.len(),
+                self.buffer.capacity(),
+                cfg.max_payload_len
+            );
             return Err(IsoTpError::Overflow);
         }
         self.buffer.as_mut()[..len].copy_from_slice(&data[..len]);
         self.written = len;
+        isotp_debug!("rx single complete len={}", len);
         Ok(RxOutcome::Completed(len))
     }
 
     fn handle_first(
         &mut self,
         cfg: &IsoTpConfig,
+        rx_fc: &RxFlowControl,
         len: u16,
         data: &[u8],
     ) -> Result<RxOutcome, IsoTpError<()>> {
-        if self.state != RxState::Idle {
+        if self.state == RxState::Receiving {
+            // Restart reassembly on a new FF from the same stream. This avoids wedging the
+            // receiver forever if the previous segmented transfer stalled mid-flight.
+            isotp_warn!(
+                "rx restart on first-frame written={} expected_len={}",
+                self.written,
+                self.expected_len
+            );
+            self.reset();
+        } else if self.state != RxState::Idle {
+            isotp_warn!("rx first unexpected state while not idle");
             return Err(IsoTpError::UnexpectedPdu);
         }
         let len = len as usize;
         if len > cfg.max_payload_len || len > self.buffer.capacity() {
+            isotp_warn!(
+                "rx first overflow len={} cap={} max={}",
+                len,
+                self.buffer.capacity(),
+                cfg.max_payload_len
+            );
             return Err(IsoTpError::Overflow);
         }
         let copy_len = min(data.len(), len);
@@ -175,54 +223,100 @@ impl<'a> RxMachine<'a> {
         self.written = copy_len;
         self.expected_len = len;
         self.next_sn = 1;
-        self.block_size = cfg.block_size;
-        self.block_remaining = cfg.block_size;
+        self.block_size = rx_fc.block_size;
+        self.block_remaining = rx_fc.block_size;
         self.state = RxState::Receiving;
+        isotp_debug!(
+            "rx first start expected_len={} copied={} bs={} st_min_ms={}",
+            len,
+            copy_len,
+            rx_fc.block_size,
+            rx_fc.st_min.as_millis() as u64
+        );
         Ok(RxOutcome::SendFlowControl {
             status: FlowStatus::ClearToSend,
-            block_size: cfg.block_size,
-            st_min: duration_to_st_min(cfg.st_min),
+            block_size: rx_fc.block_size,
+            st_min: duration_to_st_min(rx_fc.st_min),
         })
     }
 
     fn handle_consecutive(
         &mut self,
-        cfg: &IsoTpConfig,
+        _cfg: &IsoTpConfig,
+        rx_fc: &RxFlowControl,
         sn: u8,
         data: &[u8],
     ) -> Result<RxOutcome, IsoTpError<()>> {
         if self.state != RxState::Receiving {
+            isotp_warn!(
+                "rx cf unexpected receiving={} sn={}",
+                self.state == RxState::Receiving,
+                sn
+            );
             return Err(IsoTpError::UnexpectedPdu);
         }
         if sn != self.next_sn {
+            isotp_warn!(
+                "rx cf bad-sequence expected_sn={} got_sn={} written={} expected_len={}",
+                self.next_sn,
+                sn,
+                self.written,
+                self.expected_len
+            );
             return Err(IsoTpError::BadSequence);
         }
         if self.written >= self.expected_len {
+            isotp_warn!(
+                "rx cf overflow written={} expected_len={}",
+                self.written,
+                self.expected_len
+            );
             return Err(IsoTpError::Overflow);
         }
         let remaining = self.expected_len - self.written;
         let chunk = min(data.len(), remaining);
         let end = self.written + chunk;
         if end > self.buffer.capacity() {
+            isotp_warn!(
+                "rx cf cap overflow end={} cap={} chunk={}",
+                end,
+                self.buffer.capacity(),
+                chunk
+            );
             return Err(IsoTpError::Overflow);
         }
         self.buffer.as_mut()[self.written..end].copy_from_slice(&data[..chunk]);
         self.written = end;
         self.next_sn = (self.next_sn + 1) & 0x0F;
+        isotp_trace!(
+            "rx cf accepted sn={} chunk={} written={} expected_len={}",
+            sn,
+            chunk,
+            self.written,
+            self.expected_len
+        );
 
         if self.written >= self.expected_len {
             self.state = RxState::Idle;
+            isotp_debug!("rx complete len={}", self.written);
             return Ok(RxOutcome::Completed(self.written));
         }
 
         if self.block_size > 0 {
             self.block_remaining = self.block_remaining.saturating_sub(1);
             if self.block_remaining == 0 {
+                // Allow runtime backpressure updates to take effect at FC boundaries.
+                self.block_size = rx_fc.block_size;
                 self.block_remaining = self.block_size;
+                isotp_trace!(
+                    "rx cf sending-fc bs={} st_min_ms={}",
+                    self.block_size,
+                    rx_fc.st_min.as_millis() as u64
+                );
                 return Ok(RxOutcome::SendFlowControl {
                     status: FlowStatus::ClearToSend,
                     block_size: self.block_size,
-                    st_min: duration_to_st_min(cfg.st_min),
+                    st_min: duration_to_st_min(rx_fc.st_min),
                 });
             }
         }
