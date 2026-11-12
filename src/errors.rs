@@ -22,6 +22,7 @@ pub enum TimeoutKind {
 
 /// Transport-layer errors surfaced by the ISO-TP implementation.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum IsoTpError<E> {
     /// Deadline exceeded for the indicated phase.
     Timeout(TimeoutKind),

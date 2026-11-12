@@ -3,6 +3,7 @@ name = "can-iso-tp"
 description = "Generic implementation of the CAN ISO-TP protocol"
 version = "0.3.0"
 edition = "2024"
+rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 keywords = ["io", "can", "embedded"]
 documentation = "https://docs.rs/can-iso-tp"
@@ -41,3 +42,6 @@ tokio = { version = "1", features = [
   "time",
   "sync",
 ] }
+
+[package.metadata.docs.rs]
+all-features = true

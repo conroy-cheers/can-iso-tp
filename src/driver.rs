@@ -44,6 +44,7 @@ pub trait DriverHooks<E> {
 impl<E> DriverHooks<E> for () {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DriverStop {
     Closed,
     Shutdown,
