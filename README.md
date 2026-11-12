@@ -37,6 +37,4 @@ frames when its pending receive future is cancelled.
 The old mutable async node/demux inherent APIs remain usable for explicitly
 serialized applications. Their combined interface adapters and `AsyncWithRt`
 were removed; they do not implement the new cancellation contract. Blocking
-interface implementations remain available. Coordinated local validation needs
-Cargo patches for interface 0.2, queue 0.3, and Linux 0.2; publish those versions
-before regenerating release lockfiles.
+interface implementations remain available.
