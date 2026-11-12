@@ -44,6 +44,7 @@ struct Peer<'a, I> {
     tx_state: TxState<I>,
     pending_fc: Option<PendingFc>,
     rx_last_activity: Option<I>,
+    rx_timed_out: bool,
 }
 
 impl<'a, I> Peer<'a, I>
@@ -58,6 +59,7 @@ where
             tx_state: TxState::Idle,
             pending_fc: None,
             rx_last_activity: None,
+            rx_timed_out: false,
         }
     }
 }
@@ -301,6 +303,7 @@ where
                 );
                 peer.rx_machine.reset();
                 peer.rx_last_activity = None;
+                peer.rx_timed_out = true;
                 Self::clear_pending_fc_if_tx_idle(peer);
             }
         }
@@ -551,6 +554,85 @@ where
                 }
                 Progress::InFlight | Progress::WaitingForFlowControl => continue,
             }
+        }
+    }
+
+    /// Expire active receive timers independently of application RX backpressure.
+    /// No timer is created for an idle peer.
+    pub fn tick(&mut self) {
+        self.expire_peer_rx_timeouts();
+    }
+
+    /// Consume one observed receive timeout. Protocol drivers can report these
+    /// as rejected RX transactions; blocking callers retain their existing API.
+    pub fn take_receive_timeout(&mut self) -> Option<u8> {
+        let peer = self
+            .peers
+            .iter_mut()
+            .flatten()
+            .find(|peer| peer.rx_timed_out)?;
+        peer.rx_timed_out = false;
+        Some(peer.remote)
+    }
+
+    /// Earliest wakeup needed by active RX/TX protocol state. Idle peers add no timer.
+    pub fn next_wakeup(&self) -> Option<C::Instant> {
+        let mut next = None;
+        let mut include = |instant| {
+            if next.is_none_or(|current| instant < current) {
+                next = Some(instant);
+            }
+        };
+        for peer in self.peers.iter().flatten() {
+            if let Some(last) = peer.rx_last_activity
+                && peer.rx_machine.state == RxState::Receiving
+            {
+                include(self.clock.add(last, self.base_cfg.n_br));
+            }
+            match &peer.tx_state {
+                TxState::Idle => {}
+                TxState::WaitingForFc { deadline, .. } => include(*deadline),
+                TxState::Sending {
+                    st_min_deadline, ..
+                } => include(st_min_deadline.unwrap_or_else(|| self.clock.now())),
+            }
+        }
+        next
+    }
+
+    /// Start pacing/FC timers when a staged data frame actually reaches CAN.
+    /// Independently driven adapters call this after FF/CF acceptance, before
+    /// polling further TX progress. Flow-control frames must not call this.
+    pub fn on_tx_frame_accepted(&mut self, remote: u8) {
+        let Some(index) = self.find_peer_index(remote) else {
+            return;
+        };
+        let peer = self.peers[index].as_mut().expect("peer exists");
+        let now = self.clock.now();
+        match &mut peer.tx_state {
+            TxState::WaitingForFc { deadline, .. } => {
+                *deadline = self.clock.add(now, self.base_cfg.n_bs)
+            }
+            TxState::Sending {
+                session,
+                st_min_deadline,
+            } => {
+                *st_min_deadline = if session.st_min.is_zero() {
+                    None
+                } else {
+                    Some(self.clock.add(now, session.st_min))
+                };
+            }
+            TxState::Idle => {}
+        }
+    }
+
+    /// Abandon protocol TX state after a reported transaction error.
+    pub fn reset_send(&mut self, remote: u8) {
+        if let Some(index) = self.find_peer_index(remote) {
+            let peer = self.peers[index].as_mut().expect("peer exists");
+            peer.tx_state = TxState::Idle;
+            peer.pending_fc = None;
         }
     }
 

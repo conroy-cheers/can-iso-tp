@@ -51,3 +51,28 @@ impl<E> From<E> for IsoTpError<E> {
         IsoTpError::LinkError(err)
     }
 }
+
+impl<E: core::fmt::Display> core::fmt::Display for IsoTpError<E> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Timeout(kind) => write!(f, "ISO-TP {kind:?} timeout"),
+            Self::LinkError(error) => write!(f, "CAN link error: {error}"),
+            Self::UnexpectedPdu => f.write_str("unexpected ISO-TP PDU"),
+            Self::BadSequence => f.write_str("ISO-TP sequence mismatch"),
+            Self::Overflow => f.write_str("ISO-TP payload overflow"),
+            Self::InvalidFrame => f.write_str("invalid CAN frame"),
+            Self::InvalidConfig => f.write_str("invalid ISO-TP configuration"),
+            Self::WouldBlock => f.write_str("ISO-TP would block"),
+            Self::RxOverflow => f.write_str("ISO-TP receive overflow"),
+            Self::NotIdle => f.write_str("ISO-TP transfer already active"),
+        }
+    }
+}
+impl<E: core::error::Error + 'static> core::error::Error for IsoTpError<E> {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::LinkError(error) => Some(error),
+            _ => None,
+        }
+    }
+}

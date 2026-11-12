@@ -146,8 +146,6 @@ pub use config::IsoTpConfig;
 #[cfg(feature = "uds")]
 pub use demux::{IsoTpDemux, rx_storages_from_buffers};
 pub use errors::{IsoTpError, TimeoutKind};
-#[cfg(feature = "isotp-interface")]
-pub use interface_impl::AsyncWithRt;
 pub use rx::RxStorage;
 pub use timer::Clock;
 #[cfg(feature = "std")]
@@ -878,3 +876,6 @@ where
         })
     }
 }
+
+#[cfg(feature = "async-driver")]
+pub mod driver;
