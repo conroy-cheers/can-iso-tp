@@ -47,6 +47,8 @@ dependencies = [
 [[package]]
 name = "can-isotp-interface"
 version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84494635ebe285ee9dc96003d240eed056a7a0052b9eb6131a58d07944f69924"
 dependencies = [
  "embassy-time",
  "tokio",
@@ -55,6 +57,8 @@ dependencies = [
 [[package]]
 name = "can-isotp-queue"
 version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b606d0a42e5762c6c28a4d44ced3f0142740aeac1a2000714534ff2ce09ec4e1"
 dependencies = [
  "can-isotp-interface",
  "embassy-futures",
@@ -316,6 +320,8 @@ checksum = "b5b646652bf6661599e1da8901b3b9522896f01e736bad5f723fe7a3a27f899d"
 [[package]]
 name = "linux-socketcan-iso-tp"
 version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e99404fd02e34ae78ea023a968c8ae36b90b5dc83b71c3ccdb74e5f890e5ff5"
 dependencies = [
  "can-isotp-interface",
  "can-uds",
