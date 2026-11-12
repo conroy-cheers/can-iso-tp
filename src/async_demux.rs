@@ -631,12 +631,11 @@ where
             }
         }
 
-        if completed_ready
-            && !self.try_spill_completed_from_peer(peer_idx)? {
-                self.ready
-                    .push(ReadyItem::Peer(peer_idx))
-                    .map_err(|_| IsoTpError::RxOverflow)?;
-            }
+        if completed_ready && !self.try_spill_completed_from_peer(peer_idx)? {
+            self.ready
+                .push(ReadyItem::Peer(peer_idx))
+                .map_err(|_| IsoTpError::RxOverflow)?;
+        }
 
         if let Some((status, block_size, st_min)) = fc_to_send {
             isotp_trace!(

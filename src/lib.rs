@@ -17,11 +17,11 @@
 //! explicit caller-provided buffer (borrowed or owned).
 //!
 //! # Feature flags
-//! - `std` (default): enables allocation support and exports [`StdClock`].
+//! - `std` (default): enables allocation support and exports `StdClock`.
 //! - `alloc`: enables allocation support without the Rust standard library (e.g. to use
-//!   [`RxStorage::Owned`]).
+//!   `RxStorage::Owned`).
 //! - `uds`: enables 29-bit UDS “normal fixed” addressing helpers (`can-uds`) and multi-peer
-//!   demultiplexers ([`IsoTpDemux`], [`IsoTpAsyncDemux`]) that provide `reply_to` metadata.
+//!   demultiplexers (`IsoTpDemux`, `IsoTpAsyncDemux`) that provide `reply_to` metadata.
 //!
 //! # Concepts
 //! - **Addressing**: ISO-TP supports “normal” addressing (just CAN IDs), and extended/mixed modes

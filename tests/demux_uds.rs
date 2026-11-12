@@ -100,14 +100,12 @@ fn demux_receives_two_sources_without_mixing() {
     while clock.elapsed(start) < Duration::from_secs(2) {
         let now = clock.now();
 
-        if !s1_done
-            && n1.poll_send(&p1, now).unwrap() == Progress::Completed {
-                s1_done = true;
-            }
-        if !s2_done
-            && n2.poll_send(&p2, now).unwrap() == Progress::Completed {
-                s2_done = true;
-            }
+        if !s1_done && n1.poll_send(&p1, now).unwrap() == Progress::Completed {
+            s1_done = true;
+        }
+        if !s2_done && n2.poll_send(&p2, now).unwrap() == Progress::Completed {
+            s2_done = true;
+        }
 
         let _ = demux.poll_recv(now, &mut |reply_to, payload| {
             if reply_to == sa1 {
@@ -173,10 +171,9 @@ fn demux_can_send_to_and_peer_can_receive() {
     while clock.elapsed(start) < Duration::from_secs(2) {
         let now = clock.now();
 
-        if !send_done
-            && demux.poll_send_to(remote, &payload, now).unwrap() == Progress::Completed {
-                send_done = true;
-            }
+        if !send_done && demux.poll_send_to(remote, &payload, now).unwrap() == Progress::Completed {
+            send_done = true;
+        }
 
         let _ = peer.poll_recv(now, &mut |data| {
             got = Some(data.to_vec());

@@ -128,7 +128,7 @@ pub fn rx_storages_from_buffers<'a, const N: usize, const L: usize>(
 /// - Per-peer sessions are keyed by `source address` (`SA` field).
 ///
 /// The caller must ensure the underlying CAN interface accepts all frames addressed to
-/// `local_addr` (see [`IsoTpDemux::acceptance_filter`]).
+/// `local_addr` (see [`IsoTpDemux::acceptance_filters`]).
 pub struct IsoTpDemux<'a, Tx, Rx, F, C, const MAX_PEERS: usize>
 where
     Tx: TxFrameIo<Frame = F>,
